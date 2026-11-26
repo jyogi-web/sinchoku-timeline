@@ -1,0 +1,20 @@
+name = "sinchoku-timeline"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+# 5分ごとにポーリングを実行する（docs/spec.md §4）
+[triggers]
+crons = ["*/5 * * * *"]
+
+# `npx wrangler d1 create sinchoku-timeline` で作成し、表示された database_id に置き換える
+[[d1_databases]]
+binding = "DB"
+database_name = "sinchoku-timeline"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# シークレットはここに書かない。本番は `npx wrangler secret put <名前>`、ローカルは .dev.vars に書く
+#   GITHUB_TOKEN            運営側の Personal Access Token（スコープなし）
+#   DISCORD_APPLICATION_ID  Discord アプリケーションの ID
+#   DISCORD_PUBLIC_KEY      Discord アプリケーションの公開鍵（Interactions の署名検証に使う）
+#   DISCORD_BOT_TOKEN       Bot トークン（投稿と権限確認に使う）

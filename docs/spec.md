@@ -168,6 +168,7 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `/push` | commitを流すかを切り替える |
 | `/push` の `on` / `off` | 流す / 流さない |
 | `/list` | 登録者の一覧を表示する |
+| `/config` | 設定を変更する（Discord の仕様で必須のため仮置き） |
 | `/config channel` | 投稿先のチャンネルを変更する |
 | `/config channel` の `channel` | 投稿先のチャンネル |
 | `/help` | 使い方を表示する |
@@ -231,6 +232,8 @@ PR のタイトル・commit のタイトルは GitHub の内容をそのまま�
 
 publicリポジトリの活動だけが対象です。反映まで最大5分ほどかかります。
 ```
+
+- `#{channel}` は Discord のチャンネルリンク（`<#ID>`）で表示する。投稿先が未設定のときは「投稿先のチャンネル」と表示する
 
 ## 9. 今後の検討事項（MVP 外）
 

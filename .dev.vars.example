@@ -1,0 +1,7 @@
+# このファイルを .dev.vars にコピーして値を入れる（.dev.vars は .gitignore 済み）
+GITHUB_TOKEN=
+DISCORD_APPLICATION_ID=
+DISCORD_PUBLIC_KEY=
+DISCORD_BOT_TOKEN=
+# scripts/register-commands.ts でコマンドを登録するサーバーの ID
+DISCORD_GUILD_ID=
