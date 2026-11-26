@@ -42,13 +42,18 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
   - PR のタイトル（PR へのリンク付き）
   - リポジトリ名と PR 番号（例：`jyogi/web-app · #42`）
 - PR の本文は表示しない
-- イベントの payload にタイトルが含まれない場合は `GET /repos/{owner}/{repo}/pulls/{number}` で取得する（要実データ確認）
+- 取得：PR の作成 1 件ごとに 1 リクエスト
+  - イベントの `payload.pull_request` には `base`・`head`・`id`・`number`・`url` しか含まれず、タイトルがない（2026-11 に実データで確認）
+  - タイトルは `GET /repos/{owner}/{repo}/pulls/{number}` で取得する
+  - PR へのリンクは `https://github.com/{owner}/{repo}/pull/{number}` で組み立てる（リクエスト不要）
+  - 作成者のアイコンはイベントの `actor.avatar_url` を使う（リクエスト不要）
 
 ### 3.2 commit（push）
 
 - ユーザーごとに `/push on` / `/push off` で切り替え。**初期設定はオフ**
 - 対象：`PushEvent`
 - 取得：PushEvent 1 件ごとに 1 リクエスト
+  - PushEvent の payload は `before`・`head`・`push_id`・`ref`・`repository_id` のみで、commit の一覧・件数は含まれない（2026-11 に実データで確認）
   - 通常：`GET /repos/{owner}/{repo}/compare/{before}...{head}`
   - ブランチの初回 push（`before` が存在しない）：`GET /repos/{owner}/{repo}/commits/{head}` で最新の 1 件のみ
 - 絞り込み（以下を除外する）
