@@ -8,7 +8,7 @@ export interface UserRow {
   github_id: number;
   push_enabled: number; // 0 / 1
   etag: string | null;
-  last_event_id: string | null; // null = 登録直後
+  seen_event_ids: string | null; // 前回取得したイベント ID の JSON 配列。null = 登録直後
   last_polled_at: number | null;
   created_at: number;
   updated_at: number;
@@ -33,12 +33,12 @@ export async function insertUser(db: D1Database, discordUserId: string, githubLo
     .run();
 }
 
-/** GitHub アカウントを変更する。ETag と最後のイベント ID をリセットし「登録直後」と同じ扱いにする（push 設定は引き継ぐ） */
+/** GitHub アカウントを変更する。ETag と見たイベント ID の一覧をリセットし「登録直後」と同じ扱いにする（push 設定は引き継ぐ） */
 export async function changeGithub(db: D1Database, discordUserId: string, githubLogin: string, githubId: number, now: number): Promise<void> {
   await db
     .prepare(
       `UPDATE users
-         SET github_login = ?, github_id = ?, etag = NULL, last_event_id = NULL, last_polled_at = NULL, updated_at = ?
+         SET github_login = ?, github_id = ?, etag = NULL, seen_event_ids = NULL, last_polled_at = NULL, updated_at = ?
        WHERE discord_user_id = ?`,
     )
     .bind(githubLogin, githubId, now, discordUserId)
@@ -82,11 +82,11 @@ export async function listUsersForPolling(db: D1Database): Promise<UserRow[]> {
 export async function savePollState(
   db: D1Database,
   discordUserId: string,
-  state: { etag: string | null; lastEventId: string | null; lastPolledAt: number | null },
+  state: { etag: string | null; seenEventIds: string | null; lastPolledAt: number | null },
 ): Promise<void> {
   await db
-    .prepare("UPDATE users SET etag = ?, last_event_id = ?, last_polled_at = ? WHERE discord_user_id = ?")
-    .bind(state.etag, state.lastEventId, state.lastPolledAt, discordUserId)
+    .prepare("UPDATE users SET etag = ?, seen_event_ids = ?, last_polled_at = ? WHERE discord_user_id = ?")
+    .bind(state.etag, state.seenEventIds, state.lastPolledAt, discordUserId)
     .run();
 }
 

@@ -10,6 +10,7 @@ import { commitTitle, isZeroSha, newestFirst, pickOwnCommits } from "./commits.t
 import * as db from "./db.ts";
 import { DiscordRateLimitError, PostFailedError, postMessage } from "./discord/api.ts";
 import type { Env } from "./env.ts";
+import { nextSeenIds, parseSeenIds, selectNewEvents } from "./events.ts";
 import {
   fetchCommit,
   fetchCompare,
@@ -56,29 +57,27 @@ async function pollUser(env: Env, budget: RequestBudget, channelId: string, user
   // 変化なし（304）／ユーザーが見つからない：確認した時刻だけ更新
   if (res.status !== "ok") {
     if (res.status === "not_found") console.log(`${user.github_login} が GitHub に見つかりません`);
-    await db.savePollState(env.DB, user.discord_user_id, { etag: user.etag, lastEventId: user.last_event_id, lastPolledAt: now });
+    await db.savePollState(env.DB, user.discord_user_id, { etag: user.etag, seenEventIds: user.seen_event_ids, lastPolledAt: now });
     return;
   }
 
-  // API は新しい順で返すので、古い順に並べ替える
-  const events = [...res.events].sort((a, b) => compareEventId(a.id, b.id));
-
-  // 登録直後：過去分は流さず、最新のイベント ID を記録するだけ（§5）
-  if (user.last_event_id === null) {
-    const newest = events.at(-1)?.id ?? "0";
-    await db.savePollState(env.DB, user.discord_user_id, { etag: res.etag, lastEventId: newest, lastPolledAt: now });
+  // 登録直後：過去分は流さず、今見えているイベントの ID を記録するだけ（§5）
+  if (user.seen_event_ids === null) {
+    const ids = res.events.map((e) => e.id);
+    await db.savePollState(env.DB, user.discord_user_id, { etag: res.etag, seenEventIds: JSON.stringify(ids), lastPolledAt: now });
     return;
   }
 
-  const lastId = user.last_event_id;
-  const newEvents = events.filter((e) => compareEventId(e.id, lastId) > 0);
+  // 前回見た ID の一覧にないものが新しいイベント（古い順）
+  const seen = parseSeenIds(user.seen_event_ids);
+  const newEvents = selectNewEvents(res.events, seen);
 
-  let processedId = lastId;
+  const processed = new Set<string>();
   let completed = false;
   try {
     for (const event of newEvents) {
       await handleEvent(env, budget, channelId, user, event, now);
-      processedId = event.id; // 1 件処理するたびに進める
+      processed.add(event.id); // 1 件処理するたびに記録する
     }
     completed = true;
   } catch (e) {
@@ -90,7 +89,7 @@ async function pollUser(env: Env, budget: RequestBudget, channelId: string, user
     // 確認時刻も更新しないので、次回も先頭の方で処理される
     await db.savePollState(env.DB, user.discord_user_id, {
       etag: completed ? res.etag : user.etag,
-      lastEventId: processedId,
+      seenEventIds: JSON.stringify(nextSeenIds(res.events, seen, processed)),
       lastPolledAt: completed ? now : user.last_polled_at,
     });
   }
@@ -163,11 +162,4 @@ async function commitMessage(env: Env, budget: RequestBudget, event: GitHubEvent
     count: countKnown ? own.length : null,
     createdAt: event.created_at,
   });
-}
-
-/** イベント ID（数字の文字列）の大小比較。桁数が多いので BigInt で比べる */
-export function compareEventId(a: string, b: string): number {
-  const x = BigInt(a);
-  const y = BigInt(b);
-  return x < y ? -1 : x > y ? 1 : 0;
 }

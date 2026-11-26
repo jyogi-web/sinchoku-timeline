@@ -84,14 +84,17 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 
 ## 5. 重複と取りこぼし
 
-- ユーザーごとに「最後に処理したイベント ID」を保存する
-- 取得したイベントのうち、保存している ID より大きいものだけを古い順に処理する
-- Discord への投稿に成功するたびに ID を進める。失敗した場合はそこで止め、次回にやり直す
+- ユーザーごとに「前回取得したイベント ID の一覧」（最大 100 件）を保存する
+- 取得したイベントのうち、その一覧に含まれない ID のものだけを、発生日時の古い順に処理する
+  - イベント ID は種類によって番号の範囲が異なり（PushEvent だけ大きい等）、新しいほど大きいとは限らない（2026-11 に実データで確認）。そのため ID の大小では比べない
+  - 反映が遅れて後から出てきた古い日時のイベントも、一覧になければ処理される
+- Discord への投稿に成功したイベントの ID だけを一覧に加える。失敗した場合はそこで止め、残りは次回にやり直す
+- 一覧には今回の取得結果に含まれる ID だけを残す（一覧が増え続けない）
 
 | ケース | 扱い |
 |---|---|
-| 登録した直後 | 過去分は流さず、その時点の最新イベント ID を記録するだけ |
-| `/register` で GitHub 名を変更 | ETag と最後のイベント ID をリセットし、登録直後と同じ扱い |
+| 登録した直後 | 過去分は流さず、その時点で見えているイベントの ID を記録するだけ |
+| `/register` で GitHub 名を変更 | ETag とイベント ID の一覧をリセットし、登録直後と同じ扱い |
 | `/unregister` 後に再登録 | 登録直後と同じ扱い |
 | 停止からの復帰 | 直近 24 時間以内に発生したイベントだけ流し、それより古いものは捨てる |
 
@@ -124,7 +127,7 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `github_id` | INTEGER（UNIQUE） | GitHub のユーザー ID（commit の作者判定に使う）。同じ GitHub アカウントを複数の Discord ユーザーが登録することは許可しない |
 | `push_enabled` | INTEGER | commit 表示のオンオフ（0 / 1、初期値 0） |
 | `etag` | TEXT（null 可） | 前回のレスポンスの ETag |
-| `last_event_id` | TEXT（null 可） | 最後に処理したイベント ID。null なら「登録直後」として扱う |
+| `seen_event_ids` | TEXT（null 可） | 前回取得したイベント ID の JSON 配列（最大 100 件）。null なら「登録直後」として扱う |
 | `last_polled_at` | INTEGER（null 可） | 最後に確認した時刻（処理順の決定に使う） |
 | `created_at` | INTEGER | 登録日時 |
 | `updated_at` | INTEGER | 更新日時 |
@@ -143,12 +146,12 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 
 | 処理 | 操作 |
 |---|---|
-| `/register` | `GET /users/{name}` で存在を確認し、`github_id` を取得する。新規なら追加、登録済みなら上書きする。GitHub 名が変わった場合は `etag` と `last_event_id` を null にする |
+| `/register` | `GET /users/{name}` で存在を確認し、`github_id` を取得する。新規なら追加、登録済みなら上書きする。GitHub 名が変わった場合は `etag` と `seen_event_ids` を null にする |
 | `/unregister` | 行を削除する |
 | `/push on/off` | `push_enabled` を更新する |
 | `/list` | `users` を全件取得する |
 | `/config channel` | `settings` の `channel_id` を更新する |
-| ポーリング | `last_polled_at` の古い順に取得し、処理後に `etag`・`last_event_id`・`last_polled_at` を更新する |
+| ポーリング | `last_polled_at` の古い順に取得し、処理後に `etag`・`seen_event_ids`・`last_polled_at` を更新する |
 
 ### 7.4 保存しないもの
 
