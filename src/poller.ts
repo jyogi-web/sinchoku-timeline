@@ -52,7 +52,10 @@ export async function runPoll(env: Env, now = Date.now()): Promise<void> {
 }
 
 async function pollUser(env: Env, budget: RequestBudget, channelId: string, user: db.UserRow, now: number): Promise<void> {
-  const res = await fetchUserEvents(env, budget, user.github_login, user.etag);
+  // 登録直後は ETag を付けない。付けると 304 が返り、登録直後の記録が行われないまま残ってしまう
+  const seenJson = user.seen_event_ids;
+  const isFirstPoll = seenJson === null;
+  const res = await fetchUserEvents(env, budget, user.github_login, isFirstPoll ? null : user.etag);
 
   // 変化なし（304）／ユーザーが見つからない：確認した時刻だけ更新
   if (res.status !== "ok") {
@@ -62,14 +65,14 @@ async function pollUser(env: Env, budget: RequestBudget, channelId: string, user
   }
 
   // 登録直後：過去分は流さず、今見えているイベントの ID を記録するだけ（§5）
-  if (user.seen_event_ids === null) {
+  if (seenJson === null) {
     const ids = res.events.map((e) => e.id);
     await db.savePollState(env.DB, user.discord_user_id, { etag: res.etag, seenEventIds: JSON.stringify(ids), lastPolledAt: now });
     return;
   }
 
   // 前回見た ID の一覧にないものが新しいイベント（古い順）
-  const seen = parseSeenIds(user.seen_event_ids);
+  const seen = parseSeenIds(seenJson);
   const newEvents = selectNewEvents(res.events, seen);
 
   const processed = new Set<string>();
