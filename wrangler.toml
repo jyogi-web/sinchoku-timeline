@@ -1,4 +1,6 @@
 name = "sinchoku-timeline"
+# デプロイ先の Cloudflare アカウント（シークレットではない）
+account_id = "da1ba209d61b3c9fb6834468fb0bb4f4"
 main = "src/index.ts"
 compatibility_date = "2026-11-01"
 
@@ -6,11 +8,11 @@ compatibility_date = "2026-11-01"
 [triggers]
 crons = ["*/5 * * * *"]
 
-# `npx wrangler d1 create sinchoku-timeline` で作成し、表示された database_id に置き換える
+# `npx wrangler d1 create sinchoku-timeline` で作成したデータベース
 [[d1_databases]]
 binding = "DB"
 database_name = "sinchoku-timeline"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "1a212b79-8232-4b07-90cb-767561776a67"
 migrations_dir = "migrations"
 
 # シークレットはここに書かない。本番は `npx wrangler secret put <名前>`、ローカルは .dev.vars に書く
