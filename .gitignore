@@ -1,0 +1,9 @@
+# Claude Code（個人用の設定のみ除外。settings.json や skills は共有する）
+.claude/settings.local.json
+
+# Node.js
+node_modules/
+
+# Cloudflare Workers（ローカル用のシークレットとキャッシュ）
+.dev.vars
+.wrangler/
