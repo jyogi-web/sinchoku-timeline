@@ -24,9 +24,21 @@ export const ADMINISTRATOR = 1n << 3n;
 export const VIEW_CHANNEL = 1n << 10n;
 export const SEND_MESSAGES = 1n << 11n;
 export const EMBED_LINKS = 1n << 14n;
+export const SEND_MESSAGES_IN_THREADS = 1n << 38n;
 
-/** タイムラインの投稿に必要な権限 */
+/** タイムラインの投稿に必要な権限（通常のチャンネル） */
 export const REQUIRED_FOR_POSTING = VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS;
+/** タイムラインの投稿に必要な権限（スレッド。「メッセージを送る」の代わりに「スレッドでメッセージを送る」が要る） */
+export const REQUIRED_FOR_THREAD_POSTING = VIEW_CHANNEL | SEND_MESSAGES_IN_THREADS | EMBED_LINKS;
+
+// チャンネルの種類
+export const ANNOUNCEMENT_THREAD = 10;
+export const PUBLIC_THREAD = 11; // フォーラムの投稿も公開スレッド
+
+/** 投稿先として選べるスレッドか（プライベートスレッドは Bot をメンバーに加える必要があるため対象外） */
+export function isThread(channelType: number): boolean {
+  return channelType === ANNOUNCEMENT_THREAD || channelType === PUBLIC_THREAD;
+}
 
 export function computeChannelPermissions(p: {
   guildId: string; // @everyone ロールの ID はサーバー ID と同じ
@@ -71,6 +83,7 @@ export function computeChannelPermissions(p: {
   return perms;
 }
 
-export function canPost(perms: bigint): boolean {
-  return (perms & REQUIRED_FOR_POSTING) === REQUIRED_FOR_POSTING;
+export function canPost(perms: bigint, thread = false): boolean {
+  const required = thread ? REQUIRED_FOR_THREAD_POSTING : REQUIRED_FOR_POSTING;
+  return (perms & required) === required;
 }

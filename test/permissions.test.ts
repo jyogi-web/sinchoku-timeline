@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { ADMINISTRATOR, canPost, computeChannelPermissions, REQUIRED_FOR_POSTING, SEND_MESSAGES, VIEW_CHANNEL } from "../src/discord/permissions.ts";
+import {
+  ADMINISTRATOR,
+  canPost,
+  computeChannelPermissions,
+  REQUIRED_FOR_POSTING,
+  REQUIRED_FOR_THREAD_POSTING,
+  SEND_MESSAGES,
+  VIEW_CHANNEL,
+} from "../src/discord/permissions.ts";
 
 const GUILD = "100";
 const BOT = "200";
@@ -48,6 +56,15 @@ describe("computeChannelPermissions", () => {
       ],
     });
     expect(canPost(perms)).toBe(true);
+  });
+
+  it("スレッドには「スレッドでメッセージを送る」が要る（「メッセージを送る」だけでは不可）", () => {
+    const base = { guildId: GUILD, memberId: BOT, memberRoleIds: [], overwrites: [] };
+    const sendOnly = computeChannelPermissions({ ...base, roles: [{ id: GUILD, permissions: s(REQUIRED_FOR_POSTING) }] });
+    expect(canPost(sendOnly, true)).toBe(false);
+
+    const threadOk = computeChannelPermissions({ ...base, roles: [{ id: GUILD, permissions: s(REQUIRED_FOR_THREAD_POSTING) }] });
+    expect(canPost(threadOk, true)).toBe(true);
   });
 
   it("管理者権限があれば上書きに関係なく投稿できる", () => {

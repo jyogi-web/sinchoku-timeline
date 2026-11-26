@@ -9,7 +9,7 @@ import type { Env } from "../env.ts";
 import { fetchUser, isValidLogin } from "../github.ts";
 import { helpText, list, msg } from "../messages.ts";
 import { getChannel, getGuildMember, getGuildRoles } from "./api.ts";
-import { canPost, computeChannelPermissions } from "./permissions.ts";
+import { canPost, computeChannelPermissions, isThread } from "./permissions.ts";
 
 // ---- Interaction の型（使う部分だけ） ----
 
@@ -133,14 +133,20 @@ async function config(env: Env, interaction: Interaction, sub: CommandOption | u
   ]);
   if (!channel) return reply(msg.noPermission(channelId));
 
+  // スレッドは自分の権限設定を持たず、親チャンネルのものを引き継ぐ
+  const thread = isThread(channel.type);
+  if (thread && channel.thread_metadata?.locked) return reply(msg.noPermission(channelId));
+  const permissionSource = thread && channel.parent_id ? await getChannel(env, channel.parent_id).catch(() => null) : channel;
+  if (!permissionSource) return reply(msg.noPermission(channelId));
+
   const perms = computeChannelPermissions({
     guildId: interaction.guild_id,
     memberId: botId,
     memberRoleIds: member.roles,
     roles,
-    overwrites: channel.permission_overwrites ?? [],
+    overwrites: permissionSource.permission_overwrites ?? [],
   });
-  if (!canPost(perms)) return reply(msg.noPermission(channelId));
+  if (!canPost(perms, thread)) return reply(msg.noPermission(channelId));
 
   await db.setSetting(env.DB, db.SETTING_CHANNEL_ID, channelId);
   return reply(msg.channelChanged(channelId));

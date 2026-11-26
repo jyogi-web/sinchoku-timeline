@@ -61,5 +61,11 @@ export function getGuildRoles(env: Env, guildId: string) {
 }
 
 export function getChannel(env: Env, channelId: string) {
-  return getJson<{ id: string; permission_overwrites?: PermissionOverwrite[] }>(env, `/channels/${channelId}`);
+  return getJson<{
+    id: string;
+    type: number;
+    parent_id?: string | null; // スレッドの場合は親チャンネルの ID
+    permission_overwrites?: PermissionOverwrite[];
+    thread_metadata?: { archived: boolean; locked: boolean };
+  }>(env, `/channels/${channelId}`);
 }

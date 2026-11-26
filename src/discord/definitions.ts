@@ -8,9 +8,11 @@ const SUB_COMMAND = 1;
 const STRING = 3;
 const CHANNEL = 7;
 
-// チャンネルの種類（テキストとアナウンス）
+// チャンネルの種類（テキスト・アナウンス・公開スレッド。プライベートスレッドは対象外）
 const GUILD_TEXT = 0;
 const GUILD_ANNOUNCEMENT = 5;
+const ANNOUNCEMENT_THREAD = 10;
+const PUBLIC_THREAD = 11;
 
 export const commands = [
   {
@@ -49,7 +51,7 @@ export const commands = [
             name: "channel",
             description: "投稿先のチャンネル",
             required: true,
-            channel_types: [GUILD_TEXT, GUILD_ANNOUNCEMENT],
+            channel_types: [GUILD_TEXT, GUILD_ANNOUNCEMENT, ANNOUNCEMENT_THREAD, PUBLIC_THREAD],
           },
         ],
       },
