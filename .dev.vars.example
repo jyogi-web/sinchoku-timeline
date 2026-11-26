@@ -5,3 +5,5 @@ DISCORD_PUBLIC_KEY=
 DISCORD_BOT_TOKEN=
 # scripts/register-commands.ts でコマンドを登録するサーバーの ID
 DISCORD_GUILD_ID=
+# scripts/test-post.ts（npm run test-post）でテスト投稿するチャンネルの ID
+DISCORD_TEST_CHANNEL_ID=
