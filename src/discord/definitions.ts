@@ -33,6 +33,14 @@ export const commands = [
     ],
   },
   {
+    name: "star",
+    description: "スターを流すかを切り替える",
+    options: [
+      { type: SUB_COMMAND, name: "on", description: "流す" },
+      { type: SUB_COMMAND, name: "off", description: "流さない" },
+    ],
+  },
+  {
     name: "list",
     description: "登録者の一覧を表示する",
   },

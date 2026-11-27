@@ -21,6 +21,7 @@ interface DiscordEmbed {
 
 const COLOR_PR = 0x2da44e; // 緑
 const COLOR_COMMIT = 0x3b82f6; // 青
+const COLOR_STAR = 0xeab308; // 黄（仮）
 
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1) + "…";
@@ -72,6 +73,22 @@ export function buildCommitMessage(p: {
         description: lines.join("\n"),
         footer: { text: card.commitFooter(p.repo, p.branch) },
         color: COLOR_COMMIT,
+        timestamp: p.createdAt,
+      },
+    ],
+  };
+}
+
+/** スターのカード */
+export function buildStarMessage(p: { login: string; avatarUrl: string; repo: string; createdAt: string }): DiscordMessage {
+  return {
+    allowed_mentions: { parse: [] },
+    embeds: [
+      {
+        author: { name: card.starHeading(p.login, p.repo), icon_url: p.avatarUrl },
+        url: `https://github.com/${p.repo}`,
+        footer: { text: p.repo },
+        color: COLOR_STAR,
         timestamp: p.createdAt,
       },
     ],

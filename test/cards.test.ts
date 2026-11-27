@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCommitMessage, buildPrMessage } from "../src/cards.ts";
+import { buildCommitMessage, buildPrMessage, buildStarMessage } from "../src/cards.ts";
 
 describe("buildPrMessage", () => {
   it("作成者・タイトル・リンク・リポジトリと番号を出す", () => {
@@ -40,5 +40,15 @@ describe("buildCommitMessage", () => {
   it("ブランチの初回 push は件数を出さない", () => {
     const e = buildCommitMessage({ ...base, count: null }).embeds[0];
     expect(e.author.name).toBe("bob がcommitを追加しました");
+  });
+});
+
+describe("buildStarMessage", () => {
+  it("誰がどのリポジトリをスターしたかとリンクを出す", () => {
+    const m = buildStarMessage({ login: "carol", avatarUrl: "https://avatars.example/carol", repo: "jyogi/web-app", createdAt: "2026-11-26T05:00:00Z" });
+    const e = m.embeds[0];
+    expect(e.author.name).toBe("carol が jyogi/web-app をスターしました");
+    expect(e.url).toBe("https://github.com/jyogi/web-app");
+    expect(m.allowed_mentions.parse).toEqual([]);
   });
 });

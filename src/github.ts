@@ -43,6 +43,10 @@ export interface PushEventPayload {
   head: string; // push 後のブランチの先頭 SHA
 }
 
+export interface WatchEventPayload {
+  action: string; // "started"（スターを付けた）
+}
+
 export interface GitHubCommit {
   sha: string;
   commit: { message: string };
