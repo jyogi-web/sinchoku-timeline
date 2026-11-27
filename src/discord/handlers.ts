@@ -3,12 +3,14 @@
  *
  * Discord から届いた Interaction（コマンドの実行）を受け取り、応答の JSON を返す。
  * Discord は 3 秒以内に応答しないとタイムアウト扱いにするので、重い処理はしない。
+ * 時間のかかる処理（/ranking）は先に応答を返し、ctx.waitUntil で続きを処理してから応答を書き換える。
  */
 import * as db from "../db.ts";
 import type { Env } from "../env.ts";
-import { fetchUser, isValidLogin } from "../github.ts";
-import { helpText, list, msg } from "../messages.ts";
-import { getChannel, getGuildMember, getGuildRoles } from "./api.ts";
+import { fetchContributionStats, fetchUser, isValidLogin } from "../github.ts";
+import { helpText, list, msg, ranking as rankingText } from "../messages.ts";
+import { buildRankingText, countGreenDays, rankStats } from "../ranking.ts";
+import { editOriginalResponse, getChannel, getGuildMember, getGuildRoles } from "./api.ts";
 import { canPost, computeChannelPermissions, isThread } from "./permissions.ts";
 
 // ---- Interaction の型（使う部分だけ） ----
@@ -22,6 +24,7 @@ interface CommandOption {
 
 export interface Interaction {
   type: number; // 1 = PING, 2 = APPLICATION_COMMAND
+  token: string; // 応答の書き換えに使う（15 分有効）
   guild_id?: string;
   member?: { user: { id: string } }; // サーバー内で実行されたとき
   user?: { id: string }; // DM で実行されたとき
@@ -41,7 +44,7 @@ function reply(content: string, ephemeral = true): Response {
   });
 }
 
-export async function handleCommand(env: Env, interaction: Interaction): Promise<Response> {
+export async function handleCommand(env: Env, interaction: Interaction, ctx: ExecutionContext): Promise<Response> {
   const userId = interaction.member?.user.id ?? interaction.user?.id;
   const data = interaction.data;
   if (!userId || !data) return reply(msg.internalError());
@@ -56,6 +59,8 @@ export async function handleCommand(env: Env, interaction: Interaction): Promise
         return await push(env, userId, data.options?.[0]?.name === "on");
       case "list":
         return await listUsers(env);
+      case "ranking":
+        return await ranking(env, interaction.token, userId, ctx);
       case "config":
         return await config(env, interaction, data.options?.[0]);
       case "help":
@@ -117,6 +122,30 @@ async function listUsers(env: Env): Promise<Response> {
   if (users.length === 0) return reply(list.empty(), false);
   const lines = users.map((u) => list.line(u.github_login, u.push_enabled === 1));
   return reply([list.heading(users.length), ...lines].join("\n"), false);
+}
+
+// ---- /ranking（全員に見える） ----
+async function ranking(env: Env, interactionToken: string, discordUserId: string, ctx: ExecutionContext): Promise<Response> {
+  const [users, me] = await Promise.all([db.listUsers(env.DB), db.getUser(env.DB, discordUserId)]);
+  const myLogin = me?.github_login ?? null;
+  if (users.length === 0) return reply(buildRankingText([], myLogin), false);
+
+  // GitHub への問い合わせは 3 秒に間に合わないことがあるので、先に「集計しています…」と返してから書き換える
+  ctx.waitUntil(
+    (async () => {
+      try {
+        const stats = await fetchContributionStats(env, users.map((u) => u.github_login));
+        const ranked = rankStats(
+          stats.map((s) => ({ login: s.login, prs: s.prs, days: s.years.reduce((sum, y) => sum + countGreenDays(y.weeks), 0) })),
+        );
+        await editOriginalResponse(env, interactionToken, buildRankingText(ranked, myLogin));
+      } catch (e) {
+        console.error("/ranking の集計でエラー", e);
+        await editOriginalResponse(env, interactionToken, msg.internalError()).catch((e2) => console.error("/ranking のエラー表示に失敗", e2));
+      }
+    })(),
+  );
+  return reply(rankingText.loading(), false);
 }
 
 // ---- /config channel <#チャンネル> ----

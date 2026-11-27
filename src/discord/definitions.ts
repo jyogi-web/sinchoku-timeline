@@ -58,6 +58,10 @@ export const commands = [
     ],
   },
   {
+    name: "ranking",
+    description: "PRの数で登録者を並べる",
+  },
+  {
     name: "help",
     description: "使い方を表示する",
   },

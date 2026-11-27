@@ -102,7 +102,7 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 
 ## 6. コマンド
 
-すべてのコマンドは誰でも実行できる。実行結果は実行した本人にだけ表示する（`/list` を除く）。
+すべてのコマンドは誰でも実行できる。実行結果は実行した本人にだけ表示する（`/list` と `/ranking` を除く）。
 
 | コマンド | 内容 |
 |---|---|
@@ -112,9 +112,26 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `/push off` | 自分の commit を流さない（初期設定） |
 | `/list` | 登録者の一覧を表示する（GitHub ユーザー名と commit 表示のオンオフ。メンションはしない） |
 | `/config channel <#チャンネル>` | タイムラインの投稿先チャンネルを変更する。テキスト・アナウンスチャンネルと公開スレッド（フォーラムの投稿を含む）を選べる。プライベートスレッドとロックされたスレッドは不可 |
+| `/ranking` | 登録者を作成した PR の数で並べ、草が生えた日数を添えて表示する（§6.1） |
 | `/help` | コマンドの説明と使い方を表示する（文言は別途作成） |
 
 - `/push` などの設定コマンドは、実行した Discord ユーザー自身の設定を変更する（ユーザー名は引数に取らない）
+
+### 6.1 `/ranking`
+
+- 順位は **作成した PR の数**（GraphQL の `user.pullRequests.totalCount`。Bot のトークンから見える PR すべて＝実質 public 分）
+- 各行に **草が生えた日数**（contribution が 1 以上の日の、GitHub を始めてからの合計）を（）で添える。本人がプロフィールで「Private contributions」をオンにしていれば private 分も入る
+- 同じ PR 数は同率（2 位が 2 人なら次は 4 位）。同率の中は草の日数が多い順、次に GitHub 名順で並べる
+- 10 位以内の人を表示する（10 位が同率で複数いれば全員出す）
+- 実行した人が表示されていなければ、最後にその人の順位・PR 数・草の日数を付ける。未登録なら `/register` の案内を付ける
+- 返事はチャンネルの全員に見える
+- 取得は **`/ranking` が実行されたときだけ**（定期取得・保存はしない）。GitHub GraphQL API（`POST /graphql`）に 2 回問い合わせる
+  1. 全員分の PR 数と `contributionsCollection.contributionYears`（活動した年）
+  2. 全員分の、年ごとの `contributionCalendar`（`contributionsCollection` は 1 回で最大 1 年分のため、年ごとに alias を並べる）
+  - 人数が多いときは 10 人ずつに分けて並行に問い合わせる
+- GitHub 名が変わった・削除された登録者は GraphQL で見つからないので、ランキングから外す（ログに残す）
+- Discord は 3 秒以内に応答しないとタイムアウトになるため、先に「集計しています…」と返し、集計後にそのメッセージを書き換える（`PATCH /webhooks/{application_id}/{token}/messages/@original`）。失敗したらエラーの文言に書き換える
+- 草の数はあとから増えることがある（作業ブランチの commit が main にマージされると、commit した日に数えられる）
 
 ## 7. データの持ち方（Cloudflare D1）
 
@@ -151,15 +168,16 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `/push on/off` | `push_enabled` を更新する |
 | `/list` | `users` を全件取得する |
 | `/config channel` | `settings` の `channel_id` を更新する |
+| `/ranking` | `users` を全件取得する（集計結果は保存しない） |
 | ポーリング | `last_polled_at` の古い順に取得し、処理後に `etag`・`seen_event_ids`・`last_polled_at` を更新する |
 
 ### 7.4 保存しないもの
 
-- 投稿の履歴は保存しない。ストリークや日ごとの活動量が必要になったら、GitHub GraphQL API の `contributionsCollection`（過去 1 年分の日ごとの活動数）から取得する
+- 投稿の履歴は保存しない。PR 数や草の日数は `/ranking` のたびに GitHub GraphQL API から取得する
 
 ## 8. 文言
 
-`{}` は差し込む値。`/list` 以外のコマンドの応答は実行した本人にだけ表示する。
+`{}` は差し込む値。`/list` と `/ranking` 以外のコマンドの応答は実行した本人にだけ表示する。
 
 ### 8.1 コマンドの説明文（Discord のコマンド候補に表示）
 
@@ -174,6 +192,7 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `/config` | 設定を変更する（Discord の仕様で必須のため仮置き） |
 | `/config channel` | 投稿先のチャンネルを変更する |
 | `/config channel` の `channel` | 投稿先のチャンネル |
+| `/ranking` | PRの数で登録者を並べる |
 | `/help` | 使い方を表示する |
 
 ### 8.2 コマンドの応答
@@ -214,7 +233,22 @@ PR のタイトル・commit のタイトルは GitHub の内容をそのまま�
 | 1 行ごと | `{github}`　commit：オン ／ `{github}`　commit：オフ |
 | 0 人のとき | 登録者はいません。 |
 
-### 8.5 `/help`
+### 8.5 `/ranking`（仮の文言。精査中）
+
+| 場面 | 文言 |
+|---|---|
+| 集計中 | 集計しています… |
+| 見出し | PRランキング（登録者 {人数}人） |
+| 1 行ごと | {順位}. {github}　{PR数}件（草 {日数}日） |
+| 実行した人が表示外 | {github} は{順位}位です。{PR数}件（草 {日数}日） |
+| 実行した人が未登録 | /register で登録すると、ランキングに参加できます。 |
+| 登録者が 0 人 | 登録者はいません。 |
+| 失敗 | 共通の内部エラーの文言 |
+
+- GitHub 名は英数字とハイフンだけなので、バッククォートで囲まずそのまま出す
+- 見出しの人数は、GitHub で見つかった登録者の数
+
+### 8.6 `/help`
 
 ```
 /register <GitHubユーザー名>
@@ -233,13 +267,16 @@ PR のタイトル・commit のタイトルは GitHub の内容をそのまま�
 /config channel <#チャンネル>
   投稿先のチャンネルを変更します。
 
-publicリポジトリの活動だけが対象です。反映まで最大5分ほどかかります。
+/ranking
+  作成したPRの数で登録者を並べます。（）は草が生えた日数です。
+
+タイムラインに流れるのはpublicリポジトリの活動だけです。反映まで最大5分ほどかかります。
 ```
 
 - `#{channel}` は Discord のチャンネルリンク（`<#ID>`）で表示する。投稿先が未設定のときは「投稿先のチャンネル」と表示する
 
 ## 9. 今後の検討事項（MVP 外）
 
-- ストリーク、週次のまとめなど、やる気を出す追加機能（GraphQL の `contributionsCollection` を利用する想定）
+- 週次のまとめなど、やる気を出す追加機能（GraphQL の `contributionsCollection` を利用する想定）
 - 本人確認（GitHub ログインなど）
 - commit 作者判定の精度向上（メールアドレスの登録など）
