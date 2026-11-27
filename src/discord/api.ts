@@ -5,6 +5,7 @@
  *   GET  /guilds/{guild_id}/members/{user_id}  … Bot に付いているロール（権限確認用）
  *   GET  /guilds/{guild_id}/roles              … ロールごとの権限（権限確認用）
  *   GET  /channels/{channel_id}                … チャンネルの権限上書き（権限確認用）
+ *   PATCH /webhooks/{app_id}/{token}/messages/@original … コマンドの応答の書き換え（/ranking）
  */
 import type { RequestBudget } from "../budget.ts";
 import type { DiscordMessage } from "../cards.ts";
@@ -44,6 +45,21 @@ export async function postMessage(env: Env, budget: RequestBudget, channelId: st
   const res = await request(env, `/channels/${channelId}/messages`, { method: "POST", body: JSON.stringify(message) });
   if (res.status === 429) throw new DiscordRateLimitError();
   if (!res.ok) throw new PostFailedError(res.status, await res.text());
+}
+
+/**
+ * コマンドへの最初の応答を書き換える（重い処理のあとに結果を出すため）
+ * 応答を返した直後だと、Discord 側にまだメッセージができておらず 404 になることがあるので、少し待って 1 回だけやり直す
+ */
+export async function editOriginalResponse(env: Env, interactionToken: string, content: string): Promise<void> {
+  const path = `/webhooks/${env.DISCORD_APPLICATION_ID}/${interactionToken}/messages/@original`;
+  const body = JSON.stringify({ content, allowed_mentions: { parse: [] } });
+  let res = await request(env, path, { method: "PATCH", body });
+  if (res.status === 404) {
+    await new Promise((r) => setTimeout(r, 1000));
+    res = await request(env, path, { method: "PATCH", body });
+  }
+  if (!res.ok) throw new Error(`Discord API エラー: HTTP ${res.status} ${await res.text()}`);
 }
 
 async function getJson<T>(env: Env, path: string): Promise<T> {

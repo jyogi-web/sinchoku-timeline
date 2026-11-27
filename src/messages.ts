@@ -40,7 +40,17 @@ export const list = {
   empty: () => "登録者はいません。",
 };
 
-// ---- §8.5 /help ----
+// ---- §8.5 /ranking（仮の文言） ----
+export const ranking = {
+  loading: () => "集計しています…",
+  heading: (count: number) => `PRランキング（登録者 ${count}人）`,
+  line: (rank: number, github: string, prs: number, days: number) => `${rank}. ${github}　${prs}件（草 ${days}日）`,
+  yours: (github: string, rank: number, prs: number, days: number) => `${github} は${rank}位です。${prs}件（草 ${days}日）`,
+  joinGuide: () => "/register で登録すると、ランキングに参加できます。",
+  empty: () => "登録者はいません。",
+};
+
+// ---- §8.6 /help ----
 // 投稿先が未設定のときは「投稿先のチャンネル」と表示する
 export function helpText(channelId: string | null): string {
   const channel = channelId ? `<#${channelId}>` : "投稿先のチャンネル";
@@ -61,6 +71,9 @@ export function helpText(channelId: string | null): string {
     "`/config channel <#チャンネル>`",
     "  投稿先のチャンネルを変更します。",
     "",
-    "publicリポジトリの活動だけが対象です。反映まで最大5分ほどかかります。",
+    "`/ranking`",
+    "  作成したPRの数で登録者を並べます。（）は草が生えた日数です。",
+    "",
+    "タイムラインに流れるのはpublicリポジトリの活動だけです。反映まで最大5分ほどかかります。",
   ].join("\n");
 }
