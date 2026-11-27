@@ -56,6 +56,8 @@ export async function handleCommand(env: Env, interaction: Interaction, ctx: Exe
         return await register(env, userId, String(data.options?.[0]?.value ?? ""), ctx);
       case "unregister":
         return await unregister(env, userId);
+      case "star":
+        return await star(env, userId, data.options?.[0]?.name === "on");
       case "push":
         return await push(env, userId, data.options?.[0]?.name === "on");
       case "list":
@@ -130,11 +132,18 @@ async function push(env: Env, discordUserId: string, enabled: boolean): Promise<
   return reply(enabled ? msg.pushOn() : msg.pushOff());
 }
 
+// ---- /star on|off ----
+async function star(env: Env, discordUserId: string, enabled: boolean): Promise<Response> {
+  const updated = await db.setStarEnabled(env.DB, discordUserId, enabled, Date.now());
+  if (!updated) return reply(msg.registerFirst());
+  return reply(enabled ? msg.starOn() : msg.starOff());
+}
+
 // ---- /list（全員に見える） ----
 async function listUsers(env: Env): Promise<Response> {
   const users = await db.listUsers(env.DB);
   if (users.length === 0) return reply(list.empty(), false);
-  const lines = users.map((u) => list.line(u.github_login, u.push_enabled === 1));
+  const lines = users.map((u) => list.line(u.github_login, u.push_enabled === 1, u.star_enabled === 1));
   return reply([list.heading(users.length), ...lines].join("\n"), false);
 }
 

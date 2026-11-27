@@ -16,6 +16,9 @@ export const msg = {
 
   pushOn: () => "commitを流すようにしました。",
   pushOff: () => "commitを流さないようにしました。",
+  // 仮の文言（ユーザーが差し替える）
+  starOn: () => "スターを流すようにしました。",
+  starOff: () => "スターを流さないようにしました。",
   registerFirst: () => "先に `/register` で登録してください。",
 
   channelChanged: (channelId: string) => `投稿先を <#${channelId}> に変更しました。`,
@@ -30,13 +33,16 @@ export const card = {
   prFooter: (repo: string, number: number) => `${repo} · #${number}`,
   commitHeading: (github: string, count: number | null) =>
     count === null ? `${github} がcommitを追加しました` : `${github} が${count}件のcommitを追加しました`,
+  // 仮の文言
+  starHeading: (github: string, repo: string) => `${github} が ${repo} をスターしました`,
   commitFooter: (repo: string, branch: string) => `${repo} · ${branch}`,
 };
 
 // ---- §8.4 /list ----
 export const list = {
   heading: (count: number) => `登録者（${count}人）`,
-  line: (github: string, pushEnabled: boolean) => `\`${github}\`　commit：${pushEnabled ? "オン" : "オフ"}`,
+  line: (github: string, pushEnabled: boolean, starEnabled: boolean) =>
+    `\`${github}\`　commit：${pushEnabled ? "オン" : "オフ"}　スター：${starEnabled ? "オン" : "オフ"}`,
   empty: () => "登録者はいません。",
 };
 
@@ -61,6 +67,9 @@ export function helpText(channelId: string | null): string {
     "",
     "`/push on | off`",
     "  commitを流すかを切り替えます。初期設定はoffです。",
+    "",
+    "`/star on | off`",
+    "  スターを流すかを切り替えます。初期設定はonです。",
     "",
     "`/unregister`",
     "  登録を解除します。",

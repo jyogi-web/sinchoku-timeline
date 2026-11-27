@@ -7,6 +7,7 @@ export interface UserRow {
   github_login: string;
   github_id: number;
   push_enabled: number; // 0 / 1
+  star_enabled: number; // 0 / 1（初期値は1）
   etag: string | null;
   seen_event_ids: string | null; // 前回取得したイベント ID の JSON 配列。null = 登録直後
   last_polled_at: number | null;
@@ -67,6 +68,14 @@ export async function deleteUser(db: D1Database, discordUserId: string): Promise
 export async function setPushEnabled(db: D1Database, discordUserId: string, enabled: boolean, now: number): Promise<boolean> {
   const r = await db
     .prepare("UPDATE users SET push_enabled = ?, updated_at = ? WHERE discord_user_id = ?")
+    .bind(enabled ? 1 : 0, now, discordUserId)
+    .run();
+  return r.meta.changes > 0;
+}
+
+export async function setStarEnabled(db: D1Database, discordUserId: string, enabled: boolean, now: number): Promise<boolean> {
+  const r = await db
+    .prepare("UPDATE users SET star_enabled = ?, updated_at = ? WHERE discord_user_id = ?")
     .bind(enabled ? 1 : 0, now, discordUserId)
     .run();
   return r.meta.changes > 0;

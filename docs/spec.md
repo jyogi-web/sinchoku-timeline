@@ -71,6 +71,13 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 - 絞り込み後に 0 件なら投稿しない
 - ブランチ削除など、`head` に commit がない push はスキップする
 
+### 3.3 スター
+
+- Events API の `WatchEvent`（`payload.action === "started"`）を流す。追加の API リクエストは不要（投稿の 1 回だけ）
+- ユーザーごとに `/star on` / `/star off` で切り替え。**初期設定はオン**
+- 表示：スターした人のアイコンと GitHub 名、スター先のリポジトリ（クリックでリポジトリへ）
+- 仮決め（issue #2 の未決定項目）：自分のリポジトリも流す／付け直しもそのつど流す／説明文・スター数は出さない／色は黄。文言は仮
+
 ## 4. ポーリング
 
 - 5 分ごとに Cron で起動する
@@ -110,6 +117,8 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `/unregister` | 自分の登録を解除する |
 | `/push on` | 自分の commit をタイムラインに流す |
 | `/push off` | 自分の commit を流さない（初期設定） |
+| `/star on` | スターをタイムラインに流す（初期設定） |
+| `/star off` | スターを流さない |
 | `/list` | 登録者の一覧を表示する（GitHub ユーザー名と commit 表示のオンオフ。メンションはしない） |
 | `/config channel <#チャンネル>` | タイムラインの投稿先チャンネルを変更する。テキスト・アナウンスチャンネルと公開スレッド（フォーラムの投稿を含む）を選べる。プライベートスレッドとロックされたスレッドは不可 |
 | `/ranking` | 登録者を作成した PR の数で並べ、草が生えた日数を添えて表示する（§6.1） |
@@ -147,6 +156,7 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `github_login` | TEXT | GitHub ユーザー名（ポーリングの URL に使う） |
 | `github_id` | INTEGER（UNIQUE） | GitHub のユーザー ID（commit の作者判定に使う）。同じ GitHub アカウントを複数の Discord ユーザーが登録することは許可しない |
 | `push_enabled` | INTEGER | commit 表示のオンオフ（0 / 1、初期値 0） |
+| `star_enabled` | INTEGER | スター表示のオンオフ（0 / 1、初期値 1） |
 | `etag` | TEXT（null 可） | 前回のレスポンスの ETag |
 | `seen_event_ids` | TEXT（null 可） | 前回取得したイベント ID の JSON 配列（最大 100 件）。null なら「登録直後」として扱う |
 | `last_polled_at` | INTEGER（null 可） | 最後に確認した時刻（処理順の決定に使う） |
@@ -181,6 +191,7 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `/register` | `GET /users/{name}` で存在を確認し、`github_id` を取得する。新規なら追加、登録済みなら上書きする。GitHub 名が変わった場合は `etag` と `seen_event_ids` を null にする。別のアカウントに変更したら、前のアカウントの `contribution_months` を消す。応答のあと、その人の過去の草を取って `contribution_months` に保存する |
 | `/unregister` | 行を削除する（`contribution_months` の行も消す） |
 | `/push on/off` | `push_enabled` を更新する |
+| `/star on/off` | `star_enabled` を更新する |
 | `/list` | `users` を全件取得する |
 | `/config channel` | `settings` の `channel_id` を更新する |
 | `/ranking` | `users` と `contribution_months` を全件取得し、新しく確定した月を `contribution_months` に保存する |

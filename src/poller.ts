@@ -5,7 +5,7 @@
  * 新しい PR の作成と（オンの人だけ）commit をタイムラインに流す。
  */
 import { BudgetExceededError, RequestBudget } from "./budget.ts";
-import { buildCommitMessage, buildPrMessage, type DiscordMessage } from "./cards.ts";
+import { buildCommitMessage, buildPrMessage, buildStarMessage, type DiscordMessage } from "./cards.ts";
 import { commitTitle, isZeroSha, newestFirst, pickOwnCommits } from "./commits.ts";
 import * as db from "./db.ts";
 import { DiscordRateLimitError, PostFailedError, postMessage } from "./discord/api.ts";
@@ -20,6 +20,7 @@ import {
   type GitHubCommit,
   type GitHubEvent,
   type PullRequestEventPayload,
+  type WatchEventPayload,
   type PushEventPayload,
 } from "./github.ts";
 
@@ -107,9 +108,18 @@ async function handleEvent(env: Env, budget: RequestBudget, channelId: string, u
       ? await prMessage(env, budget, event)
       : event.type === "PushEvent" && user.push_enabled === 1
         ? await commitMessage(env, budget, event)
-        : null;
+        : event.type === "WatchEvent" && user.star_enabled === 1
+          ? starMessage(budget, event)
+          : null;
 
   if (message) await postMessage(env, budget, channelId, message);
+}
+
+/** スター（§3.3）。イベントだけで組み立てられるので追加のリクエストは投稿の 1 回だけ */
+function starMessage(budget: RequestBudget, event: GitHubEvent): DiscordMessage | null {
+  if ((event.payload as WatchEventPayload).action !== "started") return null;
+  budget.require(1);
+  return buildStarMessage({ login: event.actor.login, avatarUrl: event.actor.avatar_url, repo: event.repo.name, createdAt: event.created_at });
 }
 
 /** PR の作成（§3.1）。タイトルを取るために pulls API を 1 回呼ぶ */
