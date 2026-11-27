@@ -16,7 +16,7 @@ Discord サーバーに参加しているメンバーの GitHub 上の活動（P
 | 要素 | 採用 |
 |---|---|
 | 実行基盤 | Cloudflare Workers |
-| 定期実行 | Cron Triggers（5 分間隔・固定） |
+| 定期実行 | Cron Triggers（ポーリングは 5 分間隔・固定。`/ranking` 用の取得は 1 日 1 回） |
 | DB | Cloudflare D1（SQLite） |
 | 言語 | TypeScript |
 | GitHub の認証 | 運営側の Personal Access Token（スコープなし）1 つ |
@@ -125,17 +125,17 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 - 10 位以内の人を表示する（10 位が同率で複数いれば全員出す）
 - 実行した人が表示されていなければ、最後にその人の順位・PR 数・草の日数を付ける。未登録なら `/register` の案内を付ける
 - 返事はチャンネルの全員に見える
-- 取得は GitHub GraphQL API（`POST /graphql`）。定期取得はしない
-  - PR 数と `contributionsCollection.contributionYears`（活動した年）は、`/ranking` のたびに全員分取る（10 人ずつまとめる）
-  - 草の日数は **月ごとに D1 に保存する**（§7.3）。`/ranking` のたびに取るのは **今月の分だけ**
-  - 過去の分は `/register` のとき（新規・同じアカウントで再登録・別のアカウントに変更）に、その人 1 人分を取って保存する。応答を先に返し、続きで処理する
-  - 保存が欠けている人（この仕組みより前に登録した人・登録時に失敗した人）は、`/ranking` のときにその分も取る
-  - 保存したのが月の途中だった月は、月が変わったら 1 回だけ取り直して確定させる。確定した月は取り直さない
+- 取得は GitHub GraphQL API（`POST /graphql`）。**1 日 1 回の Cron（UTC 0:10 ＝ 日本時間 9:10）** で全員分を取って D1 に保存する。`/ranking` は保存した値を読むだけで、GitHub には問い合わせない
+  - PR 数は、その Cron で取って `users.prs` に保存する（10 人ずつまとめる）
+  - 草の日数は月ごとに `contribution_months` に保存する（§7.3）。人ごとに「どの日まで数えたか」（`users.contributions_synced_through`）を持ち、Cron では **その次の日〜昨日の分だけ** 取って、その月の数に足す。普段は 1 日分。失敗した日があっても、次の回にまとめて取り戻す
+  - 今日の分はまだ増えるので数えない。ランキングの草は昨日までの数字になる（「◯日時点」の表示は出さない）
+  - `/register` のとき（新規・同じアカウントで再登録・別のアカウントに変更）も、その人 1 人分を取って保存する。応答を先に返し、続きで処理する。別のアカウントに変更したときは、最初から数え直す
+  - まだ一度も数えていない人（この仕組みより前に登録した人・登録時に失敗した人）は、活動した年のうち保存のない月と、今月の 1 日〜昨日を取る。`/ranking` のときにそういう人がいれば、その人の分だけ取ってから表示する
   - 1 回の問い合わせは合計 800 日分までに分けて並行に行う（全員分の全期間を 1 回にまとめたら GitHub の処理上限 `RESOURCE_LIMITS_EXCEEDED` を超えたため）
-  - 月の区切りは UTC
-- GitHub 名が変わった・削除された登録者は GraphQL で見つからないので、ランキングから外す（ログに残す）
-- Discord は 3 秒以内に応答しないとタイムアウトになるため、先に「集計しています…」と返し、集計後にそのメッセージを書き換える（`PATCH /webhooks/{application_id}/{token}/messages/@original`）。失敗したらエラーの文言に書き換える
-- 草の数はあとから増えることがある（作業ブランチの commit が main にマージされると、commit した日に数えられる）。確定した月に、あとから増えた分は反映しない
+  - 日・月・年の区切りは UTC
+- GitHub 名が変わった・削除された登録者（GraphQL で見つからない、または ID が登録時と違う）は更新しない（前の数字のまま出る。ログに残す）。一度も数えられていなければランキングに出ない
+- まだ数えていない人の分を取るときは、Discord は 3 秒以内に応答しないとタイムアウトになるため、先に「集計しています…」と返し、集計後にそのメッセージを書き換える（`PATCH /webhooks/{application_id}/{token}/messages/@original`）。失敗したらエラーの文言に書き換える
+- 草の数はあとから増えることがある（作業ブランチの commit が main にマージされると、commit した日に数えられる）。一度数えた日に、あとから増えた分は反映しない
 
 ## 7. データの持ち方（Cloudflare D1）
 
@@ -150,6 +150,8 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `etag` | TEXT（null 可） | 前回のレスポンスの ETag |
 | `seen_event_ids` | TEXT（null 可） | 前回取得したイベント ID の JSON 配列（最大 100 件）。null なら「登録直後」として扱う |
 | `last_polled_at` | INTEGER（null 可） | 最後に確認した時刻（処理順の決定に使う） |
+| `prs` | INTEGER（null 可） | 作成した PR の数（`/ranking` 用）。null ならまだ取っていない |
+| `contributions_synced_through` | TEXT（null 可） | 草をどの日まで数えたか（例：`2026-11-26`、UTC）。null ならまだ数えていない |
 | `created_at` | INTEGER | 登録日時 |
 | `updated_at` | INTEGER | 更新日時 |
 
@@ -170,26 +172,26 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `github_id` | INTEGER | `users.github_id`（GitHub 名が変わっても使い回せるよう ID で持つ） |
 | `month` | TEXT | 年月（例：`2026-11`、UTC） |
 | `green_days` | INTEGER | その月に草が生えた日数（0 も保存する） |
-| `fetched_at` | INTEGER | 取得した時刻。その月が終わる前に取ったものは、月が変わったら取り直す |
+| `fetched_at` | INTEGER | 最後に更新した時刻（記録用） |
 
-- 主キーは (`github_id`, `month`)。今月の分は保存しない（毎回取る）
+- 主キーは (`github_id`, `month`)。今月の分も、昨日までの数を保存する
 
 ### 7.4 各処理での使い方
 
 | 処理 | 操作 |
 |---|---|
-| `/register` | `GET /users/{name}` で存在を確認し、`github_id` を取得する。新規なら追加、登録済みなら上書きする。GitHub 名が変わった場合は `etag` と `seen_event_ids` を null にする。別のアカウントに変更したら、前のアカウントの `contribution_months` を消す。応答のあと、その人の過去の草を取って `contribution_months` に保存する |
+| `/register` | `GET /users/{name}` で存在を確認し、`github_id` を取得する。新規なら追加、登録済みなら上書きする。GitHub 名が変わった場合は `etag` と `seen_event_ids` を null にする。別のアカウントに変更したら、前のアカウントの `contribution_months` を消す。別のアカウントに変更したら `prs` と `contributions_synced_through` を null にする。応答のあと、その人の草と PR 数を取って保存する |
 | `/unregister` | 行を削除する（`contribution_months` の行も消す） |
 | `/push on/off` | `push_enabled` を更新する |
 | `/list` | `users` を全件取得する |
 | `/config channel` | `settings` の `channel_id` を更新する |
-| `/ranking` | `users` と `contribution_months` を全件取得し、新しく確定した月を `contribution_months` に保存する |
+| `/ranking` | `users` と `contribution_months` を読んで表示する。`contributions_synced_through` が null の人がいれば、その人の分を取って保存してから表示する |
+| 1 日 1 回の Cron | 全員分の PR 数と、`contributions_synced_through` の次の日〜昨日の草を取り、`contribution_months`・`prs`・`contributions_synced_through` を 1 つのトランザクションで更新する |
 | ポーリング | `last_polled_at` の古い順に取得し、処理後に `etag`・`seen_event_ids`・`last_polled_at` を更新する |
 
 ### 7.5 保存しないもの
 
 - 投稿の履歴は保存しない
-- PR 数は保存しない（`/ranking` のたびに取る）
 
 ## 8. 文言
 
