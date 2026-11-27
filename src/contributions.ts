@@ -1,15 +1,10 @@
 /**
  * 草の日数を月ごとに扱うための計算（docs/spec.md §6.1）
- * API や DB は呼ばず、「どの期間を GitHub に問い合わせるか」と「合計」を決めるだけ
+ * API や DB は呼ばず、「どの期間を GitHub に問い合わせるか」と「保存する値」を決めるだけ
  *
- * 月や年の区切りはすべて UTC（GraphQL に渡す期間に合わせる）
+ * 日付・月・年の区切りはすべて UTC（GraphQL に渡す期間に合わせる）
+ * 日付は "2026-11-27" の形の文字列で扱う
  */
-
-/** 保存してある 1 か月分 */
-export interface StoredMonth {
-  greenDays: number;
-  fetchedAt: number; // ms
-}
 
 /** GitHub に問い合わせる 1 回分の期間（contributionsCollection は 1 年以内しか指定できないので、年をまたがない） */
 export interface DateRange {
@@ -18,57 +13,92 @@ export interface DateRange {
   days: number; // 期間の日数（問い合わせの重さの目安）
 }
 
+const DAY_MS = 86_400_000;
+
 /** "2026-11" */
 export function monthKey(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
-function monthStart(year: number, month: number): number {
-  return Date.UTC(year, month - 1, 1);
+/** UTC の日付 "2026-11-27" */
+export function utcDate(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
 }
 
-/** 保存した値が「その月が終わってから取ったもの」なら確定 */
-export function isFinal(month: string, fetchedAt: number): boolean {
-  const [y, m] = month.split("-").map(Number);
-  return fetchedAt >= monthStart(y, m + 1);
+function toMs(date: string): number {
+  return Date.parse(`${date}T00:00:00.000Z`);
+}
+
+export function addDays(date: string, n: number): string {
+  return utcDate(toMs(date) + n * DAY_MS);
+}
+
+/** 数え終わっている最後の日（＝昨日）。今日の分はまだ増えるので数えない */
+export function lastFinishedDay(now: number): string {
+  return addDays(utcDate(now), -1);
+}
+
+function monthEnd(year: number, month: number): string {
+  return utcDate(Date.UTC(year, month, 1) - DAY_MS);
+}
+
+/** from〜to（両端を含む）を 1 つの期間にする */
+function range(from: string, to: string): DateRange {
+  return {
+    from: `${from}T00:00:00.000Z`,
+    to: `${to}T23:59:59.000Z`,
+    days: Math.round((toMs(to) - toMs(from)) / DAY_MS) + 1,
+  };
+}
+
+/** from〜to を年の区切りで分ける。from > to なら空 */
+function splitByYear(from: string, to: string): DateRange[] {
+  const ranges: DateRange[] = [];
+  let start = from;
+  while (start <= to) {
+    const yearEnd = `${start.slice(0, 4)}-12-31`;
+    const end = yearEnd < to ? yearEnd : to;
+    ranges.push(range(start, end));
+    start = addDays(end, 1);
+  }
+  return ranges;
 }
 
 /**
- * 問い合わせる期間を決める
- * - 今月は毎回取る
- * - 活動した年のうち、終わった月で「保存がない」「月の途中に取った」ものを取る
- * 同じ年の中で取る月は、最初の月から最後の月までをまとめて 1 つの期間にする
+ * 問い合わせる期間を決める。end は数える最後の日（普段は昨日）
+ *
+ * - syncedThrough がある（前回どこまで数えたか分かっている）人：その次の日〜end だけ取る（普段は 1 日分）
+ * - ない人（初めての人・この仕組みより前に登録した人）：
+ *     活動した年のうち保存のない月と、end の月の 1 日〜end を取る
+ *     同じ年の中で取る月は、最初の月から最後の月までをまとめて 1 つの期間にする
  */
-export function planRanges(years: number[], stored: ReadonlyMap<string, StoredMonth>, now: number): DateRange[] {
-  const today = new Date(now);
-  const thisYear = today.getUTCFullYear();
-  const thisMonth = today.getUTCMonth() + 1;
+export function planRanges(
+  years: number[],
+  storedMonths: ReadonlySet<string>,
+  syncedThrough: string | null,
+  end: string,
+): DateRange[] {
+  if (syncedThrough !== null) return splitByYear(addDays(syncedThrough, 1), end);
 
+  const endYear = Number(end.slice(0, 4));
+  const endMonth = Number(end.slice(5, 7));
   const needed = new Map<number, number[]>(); // 年 → 取る月
   const add = (y: number, m: number) => needed.set(y, [...(needed.get(y) ?? []), m]);
 
   for (const y of new Set(years)) {
-    if (!Number.isInteger(y) || y > thisYear) continue;
-    const lastMonth = y === thisYear ? thisMonth - 1 : 12; // 終わった月まで
-    for (let m = 1; m <= lastMonth; m++) {
-      const s = stored.get(monthKey(y, m));
-      if (!s || !isFinal(monthKey(y, m), s.fetchedAt)) add(y, m);
-    }
+    if (!Number.isInteger(y) || y > endYear) continue;
+    const lastMonth = y === endYear ? endMonth - 1 : 12; // end の月より前の月
+    for (let m = 1; m <= lastMonth; m++) if (!storedMonths.has(monthKey(y, m))) add(y, m);
   }
-  add(thisYear, thisMonth);
+  add(endYear, endMonth);
 
   return [...needed.entries()]
     .sort(([a], [b]) => a - b)
     .map(([y, months]) => {
       const first = Math.min(...months);
       const last = Math.max(...months);
-      const from = monthStart(y, first);
-      const end = monthStart(y, last + 1); // 最後の月の翌月 1 日
-      return {
-        from: new Date(from).toISOString(),
-        to: new Date(end - 1000).toISOString(), // 最後の月の末日 23:59:59
-        days: Math.round((end - from) / 86_400_000),
-      };
+      const to = y === endYear && last === endMonth ? end : monthEnd(y, last);
+      return range(`${monthKey(y, first)}-01`, to);
     });
 }
 
@@ -82,12 +112,19 @@ export function greenDaysByMonth(days: { date: string; contributionCount: number
   return result;
 }
 
-/** 保存してある月と今回取った月を合わせて、全期間の草の日数を出す（同じ月は今回取った方を使う） */
-export function totalGreenDays(stored: ReadonlyMap<string, StoredMonth>, fetched: ReadonlyMap<string, number>): number {
-  let total = 0;
-  for (const [month, s] of stored) if (!fetched.has(month)) total += s.greenDays;
-  for (const n of fetched.values()) total += n;
-  return total;
+/**
+ * 保存する月ごとの値を出す（足した後の値で上書きするので、同じ計算を 2 回しても数が増えない）
+ * - incremental（前回の続きから取った）：保存してある数に、今回取った日の分を足す
+ * - そうでない：取った月は、その月の頭から取っているので今回の数で置き換える
+ */
+export function mergeMonths(
+  stored: ReadonlyMap<string, number>,
+  fetched: ReadonlyMap<string, number>,
+  incremental: boolean,
+): Map<string, number> {
+  const result = new Map<string, number>();
+  for (const [month, n] of fetched) result.set(month, (incremental ? (stored.get(month) ?? 0) : 0) + n);
+  return result;
 }
 
 /**

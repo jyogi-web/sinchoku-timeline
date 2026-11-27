@@ -1,66 +1,71 @@
 /**
- * 草の日数を GitHub から取り、月ごとに D1 に保存しながら集計する（docs/spec.md §6.1）
+ * 草の日数と PR 数を GitHub から取り、D1 に保存する（docs/spec.md §6.1）
  *
- *   /register … 登録した人 1 人分を取る（過去の分をここで保存しておく）
- *   /ranking  … 全員分。普段は今月の分だけ取り、保存してある月と合わせる。
- *               保存が欠けている人（この仕組みより前に登録した人・登録時に失敗した人）はその分も取る
+ *   1 日 1 回の Cron … 全員分。前回数えた日の次の日〜昨日の分だけ取って足す（普段は 1 日分）
+ *   /register       … 登録した人 1 人分
+ *   /ranking        … まだ一度も数えていない人（この仕組みより前に登録した人・登録時に失敗した人）の分だけ
+ *
+ * /ranking はここで保存した値を読むだけで、GitHub には問い合わせない
  */
-import { greenDaysByMonth, monthKey, planRanges, totalGreenDays, type StoredMonth } from "./contributions.ts";
+import { greenDaysByMonth, lastFinishedDay, mergeMonths, planRanges } from "./contributions.ts";
 import * as db from "./db.ts";
 import type { Env } from "./env.ts";
 import { fetchContributionBasics, fetchContributionDays } from "./github.ts";
-import type { RankingStats } from "./ranking.ts";
 
-export async function syncContributions(
-  env: Env,
-  users: { github_login: string; github_id: number }[],
-  now: number,
-): Promise<RankingStats[]> {
-  if (users.length === 0) return [];
+/**
+ * githubIds を渡したらその人だけ、省略したら登録者全員を更新する
+ */
+export async function syncContributions(env: Env, now: number, githubIds?: number[]): Promise<void> {
+  // 登録者と保存してある月を同時に読む（同じ時点の値で計算するため）
+  const snapshot = await db.loadContributionSnapshot(env.DB);
+  const users = githubIds ? snapshot.users.filter((u) => githubIds.includes(u.github_id)) : snapshot.users;
+  if (users.length === 0) return;
 
-  const [basics, rows] = await Promise.all([
-    fetchContributionBasics(
-      env,
-      users.map((u) => u.github_login),
-    ),
-    db.listContributionMonths(env.DB),
-  ]);
-
-  const storedById = new Map<number, Map<string, StoredMonth>>();
-  for (const r of rows) {
+  const storedById = new Map<number, Map<string, number>>();
+  for (const r of snapshot.months) {
     if (!storedById.has(r.github_id)) storedById.set(r.github_id, new Map());
-    storedById.get(r.github_id)!.set(r.month, { greenDays: r.green_days, fetchedAt: r.fetched_at });
+    storedById.get(r.github_id)!.set(r.month, r.green_days);
   }
 
-  // GitHub で見つからない人・別人の名前になっている人（ID が違う）は外す
+  const end = lastFinishedDay(now);
+  const basics = await fetchContributionBasics(
+    env,
+    users.map((u) => u.github_login),
+  );
+
+  // GitHub で見つからない人・別人の名前になっている人（ID が違う）は更新しない（前の数字のまま）
   const targets = users.flatMap((u, i) => {
     const b = basics[i];
     if (!b || b.databaseId !== u.github_id) {
-      console.warn(`GitHub ユーザー ${u.github_login} が見つからないため、ランキングから外します`);
+      console.warn(`GitHub ユーザー ${u.github_login} が見つからないため、草と PR 数を更新しません`);
       return [];
     }
-    const stored = storedById.get(u.github_id) ?? new Map<string, StoredMonth>();
-    return [{ githubId: u.github_id, basics: b, stored, ranges: planRanges(b.years, stored, now) }];
+    const stored = storedById.get(u.github_id) ?? new Map<string, number>();
+    const syncedThrough = u.contributions_synced_through;
+    // 前回 end まで数え終わっていれば、草は取らず PR 数だけ更新する
+    const ranges = syncedThrough !== null && syncedThrough >= end ? [] : planRanges(b.years, new Set(stored.keys()), syncedThrough, end);
+    return [{ user: u, basics: b, stored, ranges }];
   });
 
   const days = await fetchContributionDays(
     env,
-    targets.map((t) => ({ login: t.basics.login, ranges: t.ranges })),
+    targets.filter((t) => t.ranges.length > 0).map((t) => ({ login: t.basics.login, ranges: t.ranges })),
   );
 
-  const thisMonth = monthKey(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth() + 1);
-  const toSave: db.ContributionMonthRow[] = [];
-  const stats = targets.map((t, i) => {
-    // 問い合わせた期間の外の日が混ざっても数えないようにする
-    const inRange = days[i].filter((d) => t.ranges.some((r) => d.date >= r.from.slice(0, 10) && d.date <= r.to.slice(0, 10)));
-    const fetched = greenDaysByMonth(inRange);
-    // 今月はまだ増えるので保存しない（毎回取る）
-    for (const [month, greenDays] of fetched) {
-      if (month < thisMonth) toSave.push({ github_id: t.githubId, month, green_days: greenDays, fetched_at: now });
+  const months: db.ContributionMonthRow[] = [];
+  const stats: db.ContributionStatsUpdate[] = [];
+  let k = 0;
+  for (const t of targets) {
+    if (t.ranges.length > 0) {
+      // 問い合わせた期間の外の日が混ざっても数えないようにする
+      const inRange = days[k++].filter((d) => t.ranges.some((r) => d.date >= r.from.slice(0, 10) && d.date <= r.to.slice(0, 10)));
+      const merged = mergeMonths(t.stored, greenDaysByMonth(inRange), t.user.contributions_synced_through !== null);
+      for (const [month, greenDays] of merged) months.push({ github_id: t.user.github_id, month, green_days: greenDays, fetched_at: now });
     }
-    return { login: t.basics.login, prs: t.basics.prs, days: totalGreenDays(t.stored, fetched) };
-  });
+    const syncedThrough = t.ranges.length > 0 ? end : t.user.contributions_synced_through;
+    stats.push({ github_id: t.user.github_id, prs: t.basics.prs, contributions_synced_through: syncedThrough });
+  }
 
-  await db.saveContributionMonths(env.DB, toSave);
-  return stats;
+  // 月の数と「どの日まで数えたか」は 1 つのまとまり（トランザクション）で保存する。途中で失敗したら全部なかったことになる
+  await db.saveContributionSync(env.DB, months, stats);
 }

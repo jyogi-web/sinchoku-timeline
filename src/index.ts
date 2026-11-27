@@ -2,12 +2,18 @@
  * Worker のエントリポイント
  *
  *   fetch     … Discord のスラッシュコマンド（Interactions エンドポイント）
- *   scheduled … Cron Triggers（5 分ごと）で GitHub をポーリングする
+ *   scheduled … Cron Triggers
+ *                 5 分ごと   … GitHub をポーリングする
+ *                 1 日 1 回 … /ranking 用の草と PR 数を取って保存する
  */
+import { syncContributions } from "./contribution-sync.ts";
 import { verifyDiscordRequest } from "./discord/verify.ts";
 import { handleCommand, InteractionType, type Interaction } from "./discord/handlers.ts";
 import type { Env } from "./env.ts";
 import { runPoll } from "./poller.ts";
+
+/** wrangler.toml の crons と同じ文字列にすること（UTC 0:10 ＝ 日本時間 9:10。昨日の分が出そろってから取る） */
+const DAILY_CRON = "10 0 * * *";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -33,7 +39,11 @@ export default {
     return new Response("Unsupported interaction", { status: 400 });
   },
 
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (controller.cron === DAILY_CRON) {
+      ctx.waitUntil(syncContributions(env, Date.now()).catch((e) => console.error("草と PR 数の取得でエラー", e)));
+      return;
+    }
     ctx.waitUntil(runPoll(env));
   },
 } satisfies ExportedHandler<Env>;

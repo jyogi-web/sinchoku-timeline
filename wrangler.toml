@@ -5,8 +5,9 @@ main = "src/index.ts"
 compatibility_date = "2026-11-01"
 
 # 5分ごとにポーリングを実行する（docs/spec.md §4）
+# 1日1回（UTC 0:10）/ranking 用の草と PR 数を取る（§6.1。src/index.ts の DAILY_CRON と同じにする）
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["*/5 * * * *", "10 0 * * *"]
 
 # `npx wrangler d1 create sinchoku-timeline` で作成したデータベース
 [[d1_databases]]

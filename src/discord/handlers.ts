@@ -3,14 +3,14 @@
  *
  * Discord から届いた Interaction（コマンドの実行）を受け取り、応答の JSON を返す。
  * Discord は 3 秒以内に応答しないとタイムアウト扱いにするので、重い処理はしない。
- * 時間のかかる処理（/ranking）は先に応答を返し、ctx.waitUntil で続きを処理してから応答を書き換える。
+ * 時間のかかる処理（/ranking で GitHub に問い合わせるとき）は先に応答を返し、ctx.waitUntil で続きを処理してから応答を書き換える。
  */
 import * as db from "../db.ts";
 import type { Env } from "../env.ts";
 import { syncContributions } from "../contribution-sync.ts";
 import { fetchUser, isValidLogin } from "../github.ts";
 import { helpText, list, msg, ranking as rankingText } from "../messages.ts";
-import { buildRankingText, rankStats } from "../ranking.ts";
+import { buildRankingText, rankStats, type RankingStats } from "../ranking.ts";
 import { editOriginalResponse, getChannel, getGuildMember, getGuildRoles } from "./api.ts";
 import { canPost, computeChannelPermissions, isThread } from "./permissions.ts";
 
@@ -91,14 +91,10 @@ async function register(env: Env, discordUserId: string, input: string, ctx: Exe
   const now = Date.now();
   const me = await db.getUser(env.DB, discordUserId);
 
-  // /ranking 用に、過去の草の日数を取って保存しておく（応答を返したあとに処理する）
-  // 同じアカウントで再登録したときも走るので、保存が欠けている人は /register をやり直せば埋まる
+  // /ranking 用に、草の日数と PR 数を取って保存しておく（応答を返したあとに処理する）
+  // 同じアカウントで再登録したときは、前回数えた日の続きだけ取る
   const syncInBackground = () =>
-    ctx.waitUntil(
-      syncContributions(env, [{ github_login: gh.login, github_id: gh.id }], now).catch((e) =>
-        console.error(`${gh.login} の草の取得でエラー`, e),
-      ),
-    );
+    ctx.waitUntil(syncContributions(env, now, [gh.id]).catch((e) => console.error(`${gh.login} の草の取得でエラー`, e)));
 
   if (!me) {
     await db.insertUser(env.DB, discordUserId, gh.login, gh.id, now);
@@ -139,17 +135,22 @@ async function listUsers(env: Env): Promise<Response> {
 }
 
 // ---- /ranking（全員に見える） ----
+// 草と PR 数は 1 日 1 回の Cron で保存してあるので、普段は D1 を読むだけ
 async function ranking(env: Env, interactionToken: string, discordUserId: string, ctx: ExecutionContext): Promise<Response> {
-  const [users, me] = await Promise.all([db.listUsers(env.DB), db.getUser(env.DB, discordUserId)]);
+  const [rows, me] = await Promise.all([db.listRankingRows(env.DB), db.getUser(env.DB, discordUserId)]);
   const myLogin = me?.github_login ?? null;
-  if (users.length === 0) return reply(buildRankingText([], myLogin), false);
+  const build = (rs: db.RankingRow[]) => buildRankingText(rankStats(toRankingStats(rs)), myLogin);
 
-  // GitHub への問い合わせは 3 秒に間に合わないことがあるので、先に「集計しています…」と返してから書き換える
+  // まだ一度も数えていない人（この仕組みより前に登録した人・登録時に失敗した人）がいなければ、そのまま返す
+  const unsynced = rows.filter((r) => r.contributions_synced_through === null).map((r) => r.github_id);
+  if (unsynced.length === 0) return reply(build(rows), false);
+
+  // その人の分を GitHub から取る。3 秒に間に合わないことがあるので、先に「集計しています…」と返してから書き換える
   ctx.waitUntil(
     (async () => {
       try {
-        const ranked = rankStats(await syncContributions(env, users, Date.now()));
-        await editOriginalResponse(env, interactionToken, buildRankingText(ranked, myLogin));
+        await syncContributions(env, Date.now(), unsynced);
+        await editOriginalResponse(env, interactionToken, build(await db.listRankingRows(env.DB)));
       } catch (e) {
         console.error("/ranking の集計でエラー", e);
         await editOriginalResponse(env, interactionToken, msg.internalError()).catch((e2) => console.error("/ranking のエラー表示に失敗", e2));
@@ -157,6 +158,11 @@ async function ranking(env: Env, interactionToken: string, discordUserId: string
     })(),
   );
   return reply(rankingText.loading(), false);
+}
+
+/** PR 数をまだ取れていない人（GitHub で見つからない等）は外す */
+function toRankingStats(rows: db.RankingRow[]): RankingStats[] {
+  return rows.flatMap((r) => (r.prs === null ? [] : [{ login: r.github_login, prs: r.prs, days: r.green_days }]));
 }
 
 // ---- /config channel <#チャンネル> ----

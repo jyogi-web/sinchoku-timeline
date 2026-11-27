@@ -10,6 +10,8 @@ export interface UserRow {
   etag: string | null;
   seen_event_ids: string | null; // 前回取得したイベント ID の JSON 配列。null = 登録直後
   last_polled_at: number | null;
+  prs: number | null; // 作成した PR の数（/ranking 用）。null = まだ取っていない
+  contributions_synced_through: string | null; // 草をどの日まで数えたか（"2026-11-26"、UTC）。null = まだ数えていない
   created_at: number;
   updated_at: number;
 }
@@ -33,12 +35,16 @@ export async function insertUser(db: D1Database, discordUserId: string, githubLo
     .run();
 }
 
-/** GitHub アカウントを変更する。ETag と見たイベント ID の一覧をリセットし「登録直後」と同じ扱いにする（push 設定は引き継ぐ） */
+/**
+ * GitHub アカウントを変更する。ETag と見たイベント ID の一覧をリセットし「登録直後」と同じ扱いにする（push 設定は引き継ぐ）
+ * /ranking 用の PR 数と草も、まだ取っていない状態に戻す
+ */
 export async function changeGithub(db: D1Database, discordUserId: string, githubLogin: string, githubId: number, now: number): Promise<void> {
   await db
     .prepare(
       `UPDATE users
-         SET github_login = ?, github_id = ?, etag = NULL, seen_event_ids = NULL, last_polled_at = NULL, updated_at = ?
+         SET github_login = ?, github_id = ?, etag = NULL, seen_event_ids = NULL, last_polled_at = NULL,
+             prs = NULL, contributions_synced_through = NULL, updated_at = ?
        WHERE discord_user_id = ?`,
     )
     .bind(githubLogin, githubId, now, discordUserId)
@@ -96,7 +102,7 @@ export async function savePollState(
     .run();
 }
 
-// ---- contribution_months（/ranking の草の日数） ----
+// ---- contribution_months と users.prs（/ranking） ----
 
 export interface ContributionMonthRow {
   github_id: number;
@@ -105,19 +111,61 @@ export interface ContributionMonthRow {
   fetched_at: number;
 }
 
-/** 保存してある月ごとの草の日数（登録者が少ないので全件取る） */
-export async function listContributionMonths(db: D1Database): Promise<ContributionMonthRow[]> {
-  const r = await db.prepare("SELECT * FROM contribution_months").all<ContributionMonthRow>();
-  return r.results;
+export interface ContributionSnapshot {
+  users: Pick<UserRow, "github_login" | "github_id" | "contributions_synced_through">[];
+  months: ContributionMonthRow[];
 }
 
-export async function saveContributionMonths(db: D1Database, rows: ContributionMonthRow[]): Promise<void> {
-  if (rows.length === 0) return;
-  const stmt = db.prepare(
+/** 登録者と、保存してある月ごとの草の日数を同じ時点で読む（登録者が少ないので全件取る） */
+export async function loadContributionSnapshot(db: D1Database): Promise<ContributionSnapshot> {
+  const [users, months] = await db.batch([
+    db.prepare("SELECT github_login, github_id, contributions_synced_through FROM users ORDER BY created_at"),
+    db.prepare("SELECT * FROM contribution_months"),
+  ]);
+  return {
+    users: users.results as ContributionSnapshot["users"],
+    months: months.results as ContributionMonthRow[],
+  };
+}
+
+export interface ContributionStatsUpdate {
+  github_id: number;
+  prs: number;
+  contributions_synced_through: string | null;
+}
+
+/** 月ごとの草の日数と、PR 数・どの日まで数えたかを 1 つのトランザクションで保存する */
+export async function saveContributionSync(db: D1Database, months: ContributionMonthRow[], stats: ContributionStatsUpdate[]): Promise<void> {
+  const upsert = db.prepare(
     `INSERT INTO contribution_months (github_id, month, green_days, fetched_at) VALUES (?, ?, ?, ?)
      ON CONFLICT (github_id, month) DO UPDATE SET green_days = excluded.green_days, fetched_at = excluded.fetched_at`,
   );
-  await db.batch(rows.map((r) => stmt.bind(r.github_id, r.month, r.green_days, r.fetched_at)));
+  const update = db.prepare("UPDATE users SET prs = ?, contributions_synced_through = ? WHERE github_id = ?");
+  const statements = [
+    ...months.map((r) => upsert.bind(r.github_id, r.month, r.green_days, r.fetched_at)),
+    ...stats.map((s) => update.bind(s.prs, s.contributions_synced_through, s.github_id)),
+  ];
+  if (statements.length > 0) await db.batch(statements);
+}
+
+export interface RankingRow {
+  github_id: number;
+  github_login: string;
+  prs: number | null;
+  green_days: number;
+  contributions_synced_through: string | null;
+}
+
+/** /ranking 用に、登録者ごとの PR 数と草の日数の合計を読む */
+export async function listRankingRows(db: D1Database): Promise<RankingRow[]> {
+  const r = await db
+    .prepare(
+      `SELECT u.github_id, u.github_login, u.prs, u.contributions_synced_through, COALESCE(SUM(c.green_days), 0) AS green_days
+         FROM users u LEFT JOIN contribution_months c ON c.github_id = u.github_id
+        GROUP BY u.discord_user_id`,
+    )
+    .all<RankingRow>();
+  return r.results;
 }
 
 /** GitHub アカウントを変えたときに、前のアカウントの分を消す */

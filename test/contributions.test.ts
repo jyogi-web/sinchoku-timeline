@@ -1,60 +1,72 @@
 import { describe, expect, it } from "vitest";
-import { greenDaysByMonth, isFinal, packByDays, planRanges, totalGreenDays, type StoredMonth } from "../src/contributions.ts";
+import { addDays, greenDaysByMonth, lastFinishedDay, mergeMonths, packByDays, planRanges } from "../src/contributions.ts";
 
-const NOW = Date.UTC(2026, 10, 27, 12); // 2026-11-27 12:00 UTC
-const AFTER = (y: number, m: number) => Date.UTC(y, m, 1, 0, 5); // その月が終わったあと（翌月 1 日）
-const DURING = (y: number, m: number) => Date.UTC(y, m - 1, 15); // その月の途中
+/** 期間を ["from の日付", "to の日付"] にして比べやすくする */
+const dates = (ranges: { from: string; to: string }[]) => ranges.map((r) => [r.from.slice(0, 10), r.to.slice(0, 10)]);
 
-/** 2026 年の 1〜10 月を確定済みで保存してある状態 */
-function storedThrough2026Oct(): Map<string, StoredMonth> {
-  const s = new Map<string, StoredMonth>();
-  for (let m = 1; m <= 10; m++) s.set(`2026-${String(m).padStart(2, "0")}`, { greenDays: 1, fetchedAt: AFTER(2026, m) });
-  return s;
-}
+/** 2026 年の 1〜10 月を保存してある状態 */
+const THROUGH_OCT = new Set(Array.from({ length: 10 }, (_, i) => `2026-${String(i + 1).padStart(2, "0")}`));
 
-describe("isFinal", () => {
-  it("月が終わってから取ったものだけ確定", () => {
-    expect(isFinal("2026-10", Date.UTC(2026, 10, 1))).toBe(true); // 11/1 0:00
-    expect(isFinal("2026-10", Date.UTC(2026, 9, 31, 23))).toBe(false); // 10/31 23:00
-    expect(isFinal("2026-12", Date.UTC(2027, 0, 1))).toBe(true); // 年をまたぐ
+describe("日付", () => {
+  it("昨日を UTC で出す（月・年をまたぐ）", () => {
+    expect(lastFinishedDay(Date.UTC(2026, 10, 27, 0, 10))).toBe("2026-11-26");
+    expect(lastFinishedDay(Date.UTC(2026, 11, 1, 0, 10))).toBe("2026-11-30");
+    expect(lastFinishedDay(Date.UTC(2027, 0, 1, 0, 10))).toBe("2026-12-31");
+  });
+
+  it("日を足す（うるう年）", () => {
+    expect(addDays("2028-02-28", 1)).toBe("2028-02-29");
+    expect(addDays("2026-12-31", 1)).toBe("2027-01-01");
   });
 });
 
-describe("planRanges", () => {
-  it("保存がそろっていれば、今月だけ取る", () => {
-    const ranges = planRanges([2026], storedThrough2026Oct(), NOW);
-    expect(ranges).toEqual([{ from: "2026-11-01T00:00:00.000Z", to: "2026-11-30T23:59:59.000Z", days: 30 }]);
+describe("planRanges（前回の続きから）", () => {
+  it("普段は昨日の 1 日分だけ取る", () => {
+    const ranges = planRanges([2026], THROUGH_OCT, "2026-11-25", "2026-11-26");
+    expect(ranges).toEqual([{ from: "2026-11-26T00:00:00.000Z", to: "2026-11-26T23:59:59.000Z", days: 1 }]);
   });
 
-  it("初めての人は、活動した年を 1 年ずつ取る（今年は今月まで）", () => {
-    const ranges = planRanges([2026, 2024, 2025], new Map(), NOW);
-    expect(ranges.map((r) => [r.from.slice(0, 10), r.to.slice(0, 10)])).toEqual([
+  it("取れなかった日があれば、まとめて取り戻す（年をまたぐときは分ける）", () => {
+    const ranges = planRanges([2026], THROUGH_OCT, "2026-12-29", "2027-01-02");
+    expect(dates(ranges)).toEqual([
+      ["2026-12-30", "2026-12-31"],
+      ["2027-01-01", "2027-01-02"],
+    ]);
+    expect(ranges.map((r) => r.days)).toEqual([2, 2]);
+  });
+
+  it("もう昨日まで数えてあれば何も取らない", () => {
+    expect(planRanges([2026], THROUGH_OCT, "2026-11-26", "2026-11-26")).toEqual([]);
+  });
+});
+
+describe("planRanges（まだ数えていない人）", () => {
+  it("過去の月が保存してあれば、今月の 1 日〜昨日だけ取る", () => {
+    expect(dates(planRanges([2026], THROUGH_OCT, null, "2026-11-26"))).toEqual([["2026-11-01", "2026-11-26"]]);
+  });
+
+  it("初めての人は、活動した年を 1 年ずつ取る（今年は昨日まで）", () => {
+    const ranges = planRanges([2026, 2024, 2025], new Set(), null, "2026-11-26");
+    expect(dates(ranges)).toEqual([
       ["2024-01-01", "2024-12-31"],
       ["2025-01-01", "2025-12-31"],
-      ["2026-01-01", "2026-11-30"],
+      ["2026-01-01", "2026-11-26"],
     ]);
     expect(ranges[0].days).toBe(366); // 2024 はうるう年
   });
 
-  it("月の途中に取った先月の分は、月が変わったら取り直す", () => {
-    const stored = storedThrough2026Oct();
-    stored.set("2026-10", { greenDays: 3, fetchedAt: DURING(2026, 10) });
-    const ranges = planRanges([2026], stored, NOW);
-    expect(ranges.map((r) => [r.from.slice(0, 10), r.to.slice(0, 10)])).toEqual([["2026-10-01", "2026-11-30"]]);
+  it("保存が欠けている月は、その月から取る", () => {
+    const stored = new Set(THROUGH_OCT);
+    stored.delete("2026-09");
+    expect(dates(planRanges([2026], stored, null, "2026-11-26"))).toEqual([["2026-09-01", "2026-11-26"]]);
   });
 
-  it("年が明けたら、去年の 12 月を取り直し、今年の 1 月を取る", () => {
-    const stored = new Map<string, StoredMonth>();
-    for (let m = 1; m <= 12; m++) stored.set(`2026-${String(m).padStart(2, "0")}`, { greenDays: 1, fetchedAt: m === 12 ? DURING(2026, 12) : AFTER(2026, m) });
-    const ranges = planRanges([2026], stored, Date.UTC(2027, 0, 3));
-    expect(ranges.map((r) => [r.from.slice(0, 10), r.to.slice(0, 10)])).toEqual([
-      ["2026-12-01", "2026-12-31"],
-      ["2027-01-01", "2027-01-31"],
-    ]);
+  it("1 日に実行したら、昨日（先月の末日）までの先月の分を取る", () => {
+    expect(dates(planRanges([2026], THROUGH_OCT, null, "2026-11-30"))).toEqual([["2026-11-01", "2026-11-30"]]);
   });
 
-  it("活動した年がなくても今月は取る", () => {
-    expect(planRanges([], new Map(), NOW)).toHaveLength(1);
+  it("活動した年がなくても、昨日の月は取る", () => {
+    expect(dates(planRanges([], new Set(), null, "2026-11-26"))).toEqual([["2026-11-01", "2026-11-26"]]);
   });
 });
 
@@ -77,17 +89,34 @@ describe("greenDaysByMonth", () => {
   });
 });
 
-describe("totalGreenDays", () => {
-  it("保存してある月と今回取った月を足す。同じ月は今回取った方を使う", () => {
-    const stored = new Map<string, StoredMonth>([
-      ["2026-09", { greenDays: 10, fetchedAt: 0 }],
-      ["2026-10", { greenDays: 3, fetchedAt: 0 }],
+describe("mergeMonths", () => {
+  const stored = new Map([
+    ["2026-10", 20],
+    ["2026-11", 5],
+  ]);
+
+  it("前回の続きから取ったときは、保存してある数に足す（月をまたいでも、その月に足す）", () => {
+    const merged = mergeMonths(
+      stored,
+      new Map([
+        ["2026-11", 1],
+        ["2026-12", 1],
+      ]),
+      true,
+    );
+    expect([...merged]).toEqual([
+      ["2026-11", 6],
+      ["2026-12", 1],
     ]);
-    const fetched = new Map([
-      ["2026-10", 20],
-      ["2026-11", 5],
-    ]);
-    expect(totalGreenDays(stored, fetched)).toBe(10 + 20 + 5);
+  });
+
+  it("まだ数えていなかった人は、取った月を今回の数で置き換える", () => {
+    expect([...mergeMonths(stored, new Map([["2026-11", 8]]), false)]).toEqual([["2026-11", 8]]);
+  });
+
+  it("同じ計算を 2 回しても同じ値になる（足した後の値で上書きするため）", () => {
+    const fetched = new Map([["2026-11", 1]]);
+    expect(mergeMonths(stored, fetched, true)).toEqual(mergeMonths(stored, fetched, true));
   });
 });
 
