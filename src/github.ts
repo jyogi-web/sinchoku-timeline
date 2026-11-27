@@ -10,6 +10,7 @@
  *   POST /graphql                               … /ranking の PR 数と草（REST には草を返す API がない）
  */
 import type { RequestBudget } from "./budget.ts";
+import { packByDays, type DateRange } from "./contributions.ts";
 import type { Env } from "./env.ts";
 
 const API = "https://api.github.com";
@@ -168,82 +169,97 @@ async function graphql<T>(env: Env, query: string, variables: Record<string, unk
   return body.data;
 }
 
-/** 1 回の問い合わせにまとめる人数（クエリが大きくなりすぎないように） */
+/** 1 回の問い合わせにまとめる人数（PR 数と活動した年。軽いのでまとめてよい） */
 const GRAPHQL_CHUNK = 10;
 
-export interface ContributionStats {
+/**
+ * カレンダーの問い合わせ 1 回あたりの日数の上限
+ * 10 人 × 全期間（約 1.6 万日）を 1 回にまとめたら GitHub の処理上限（RESOURCE_LIMITS_EXCEEDED）を超えたので、小さく分ける
+ */
+const CALENDAR_DAYS_PER_QUERY = 800;
+
+export interface ContributionBasics {
   login: string; // GitHub 上の正式なユーザー名
+  databaseId: number; // GitHub のユーザー ID（users.github_id と同じ）
   prs: number; // 作成した PR の数
-  years: { year: number; weeks: { contributionDays: { contributionCount: number }[] }[] }[]; // 年ごとの草
+  years: number[]; // 活動した年
 }
 
 /**
- * 登録者の PR 数と、全期間の草（年ごとのカレンダー）を取得する
- * 見つからないユーザー（名前の変更・削除）は結果に含めない
+ * 登録者の PR 数と活動した年を取得する（logins と同じ順で返す）
+ * 見つからないユーザー（名前の変更・削除）は null
  */
-export async function fetchContributionStats(env: Env, logins: string[]): Promise<ContributionStats[]> {
+export async function fetchContributionBasics(env: Env, logins: string[]): Promise<(ContributionBasics | null)[]> {
   const chunks: string[][] = [];
   for (let i = 0; i < logins.length; i += GRAPHQL_CHUNK) chunks.push(logins.slice(i, i + GRAPHQL_CHUNK));
-  const results = await Promise.all(chunks.map((c) => fetchContributionChunk(env, c)));
+  const results = await Promise.all(chunks.map((c) => fetchBasicsChunk(env, c)));
   return results.flat();
 }
 
-async function fetchContributionChunk(env: Env, logins: string[]): Promise<ContributionStats[]> {
-  const variables = Object.fromEntries(logins.map((l, i) => [`l${i}`, l]));
-  const params = logins.map((_, i) => `$l${i}: String!`).join(", ");
-
-  // 1 回目：PR 数と、活動した年の一覧
-  type Basic = { login: string; pullRequests: { totalCount: number }; contributionsCollection: { contributionYears: number[] } } | null;
-  const basic = await graphql<Record<string, Basic>>(
+async function fetchBasicsChunk(env: Env, logins: string[]): Promise<(ContributionBasics | null)[]> {
+  type Raw = { login: string; databaseId: number; pullRequests: { totalCount: number }; contributionsCollection: { contributionYears: number[] } } | null;
+  const data = await graphql<Record<string, Raw>>(
     env,
-    `query(${params}) {
-${logins.map((_, i) => `  u${i}: user(login: $l${i}) { login pullRequests { totalCount } contributionsCollection { contributionYears } }`).join("\n")}
+    `query(${logins.map((_, i) => `$l${i}: String!`).join(", ")}) {
+${logins.map((_, i) => `  u${i}: user(login: $l${i}) { login databaseId pullRequests { totalCount } contributionsCollection { contributionYears } }`).join("\n")}
 }`,
-    variables,
+    Object.fromEntries(logins.map((l, i) => [`l${i}`, l])),
   );
+  return logins.map((_, i) => {
+    const u = data[`u${i}`];
+    if (!u) return null;
+    return { login: u.login, databaseId: u.databaseId, prs: u.pullRequests.totalCount, years: u.contributionsCollection.contributionYears };
+  });
+}
 
-  const found = logins
-    .map((login, i) => ({ i, login, user: basic[`u${i}`] }))
-    .filter((f): f is { i: number; login: string; user: NonNullable<Basic> } => {
-      if (!f.user) console.warn(`GitHub ユーザー ${f.login} が見つからないため、ランキングから外します`);
-      return f.user !== null && f.user !== undefined;
-    });
-  if (found.length === 0) return [];
+export interface ContributionDay {
+  date: string; // "2026-11-27"
+  contributionCount: number;
+}
 
-  // 2 回目：年ごとのカレンダー（contributionsCollection は 1 回で最大 1 年分のため、年ごとに alias を並べる）
-  // 年は API から返った整数なので、そのままクエリに埋め込む
-  const yearsOf = (f: (typeof found)[number]) => f.user.contributionsCollection.contributionYears.filter(Number.isInteger);
-  type Calendar = Record<string, { contributionCalendar: { weeks: { contributionDays: { contributionCount: number }[] }[] } }> | null;
-  const withYears = found.filter((f) => yearsOf(f).length > 0);
-  const calendars =
-    withYears.length === 0
-      ? {}
-      : await graphql<Record<string, Calendar>>(
-          env,
-          `query(${withYears.map((f) => `$l${f.i}: String!`).join(", ")}) {
-${withYears
+/**
+ * 指定した期間の、日ごとの contribution 数を取得する（requests と同じ順で返す）
+ * 期間は年をまたがないこと（contributionsCollection は 1 年以内しか指定できない）
+ * 問い合わせは CALENDAR_DAYS_PER_QUERY 日ごとに分けて並行に行う
+ */
+export async function fetchContributionDays(
+  env: Env,
+  requests: { login: string; ranges: DateRange[] }[],
+): Promise<ContributionDay[][]> {
+  const units = requests.flatMap((r, user) => r.ranges.map((range, k) => ({ user, k, range, days: range.days })));
+  const groups = packByDays(units, CALENDAR_DAYS_PER_QUERY);
+  const results: ContributionDay[][] = requests.map(() => []);
+
+  type Raw = Record<string, { contributionCalendar: { weeks: { contributionDays: ContributionDay[] }[] } }> | null;
+  await Promise.all(
+    groups.map(async (group) => {
+      const users = [...new Set(group.map((u) => u.user))];
+      const data = await graphql<Record<string, Raw>>(
+        env,
+        `query(${users.map((u) => `$l${u}: String!`).join(", ")}) {
+${users
   .map(
-    (f) =>
-      `  u${f.i}: user(login: $l${f.i}) {\n${yearsOf(f)
+    (u) =>
+      `  u${u}: user(login: $l${u}) {\n${group
+        .filter((x) => x.user === u)
         .map(
-          (y) =>
-            `    y${y}: contributionsCollection(from: "${y}-01-01T00:00:00Z", to: "${y}-12-31T23:59:59Z") { contributionCalendar { weeks { contributionDays { contributionCount } } } }`,
+          // 期間は自分で作った ISO 8601 の文字列なので、そのままクエリに埋め込む
+          (x) =>
+            `    r${x.k}: contributionsCollection(from: "${x.range.from}", to: "${x.range.to}") { contributionCalendar { weeks { contributionDays { date contributionCount } } } }`,
         )
         .join("\n")}\n  }`,
   )
   .join("\n")}
 }`,
-          Object.fromEntries(withYears.map((f) => [`l${f.i}`, f.login])),
-        );
-
-  return found.map((f) => {
-    const cal = (calendars as Record<string, Calendar>)[`u${f.i}`];
-    return {
-      login: f.user.login,
-      prs: f.user.pullRequests.totalCount,
-      years: yearsOf(f).map((y) => ({ year: y, weeks: cal?.[`y${y}`]?.contributionCalendar.weeks ?? [] })),
-    };
-  });
+        Object.fromEntries(users.map((u) => [`l${u}`, requests[u].login])),
+      );
+      for (const x of group) {
+        const weeks = data[`u${x.user}`]?.[`r${x.k}`]?.contributionCalendar.weeks ?? [];
+        results[x.user].push(...weeks.flatMap((w) => w.contributionDays));
+      }
+    }),
+  );
+  return results;
 }
 
 /** commit を 1 件取得する。見つからなければ null */

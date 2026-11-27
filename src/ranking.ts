@@ -20,17 +20,6 @@ export const TOP_RANK = 10;
 /** Discord のメッセージ本文の上限 */
 const MAX_CONTENT = 2000;
 
-/** 1 年分のカレンダー（週ごとの日ごとの contribution 数）から、草が生えた日数を数える */
-export function countGreenDays(weeks: { contributionDays: { contributionCount: number }[] }[]): number {
-  let days = 0;
-  for (const week of weeks) {
-    for (const day of week.contributionDays) {
-      if (day.contributionCount > 0) days++;
-    }
-  }
-  return days;
-}
-
 /**
  * PR 数の多い順に並べて順位を付ける。同じ PR 数は同率（1, 2, 2, 4 …）
  * 同率の中は草の日数が多い順、次に GitHub 名順
