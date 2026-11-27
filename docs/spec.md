@@ -125,13 +125,17 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 - 10 位以内の人を表示する（10 位が同率で複数いれば全員出す）
 - 実行した人が表示されていなければ、最後にその人の順位・PR 数・草の日数を付ける。未登録なら `/register` の案内を付ける
 - 返事はチャンネルの全員に見える
-- 取得は **`/ranking` が実行されたときだけ**（定期取得・保存はしない）。GitHub GraphQL API（`POST /graphql`）に 2 回問い合わせる
-  1. 全員分の PR 数と `contributionsCollection.contributionYears`（活動した年）
-  2. 全員分の、年ごとの `contributionCalendar`（`contributionsCollection` は 1 回で最大 1 年分のため、年ごとに alias を並べる）
-  - 人数が多いときは 10 人ずつに分けて並行に問い合わせる
+- 取得は GitHub GraphQL API（`POST /graphql`）。定期取得はしない
+  - PR 数と `contributionsCollection.contributionYears`（活動した年）は、`/ranking` のたびに全員分取る（10 人ずつまとめる）
+  - 草の日数は **月ごとに D1 に保存する**（§7.3）。`/ranking` のたびに取るのは **今月の分だけ**
+  - 過去の分は `/register` のとき（新規・同じアカウントで再登録・別のアカウントに変更）に、その人 1 人分を取って保存する。応答を先に返し、続きで処理する
+  - 保存が欠けている人（この仕組みより前に登録した人・登録時に失敗した人）は、`/ranking` のときにその分も取る
+  - 保存したのが月の途中だった月は、月が変わったら 1 回だけ取り直して確定させる。確定した月は取り直さない
+  - 1 回の問い合わせは合計 800 日分までに分けて並行に行う（全員分の全期間を 1 回にまとめたら GitHub の処理上限 `RESOURCE_LIMITS_EXCEEDED` を超えたため）
+  - 月の区切りは UTC
 - GitHub 名が変わった・削除された登録者は GraphQL で見つからないので、ランキングから外す（ログに残す）
 - Discord は 3 秒以内に応答しないとタイムアウトになるため、先に「集計しています…」と返し、集計後にそのメッセージを書き換える（`PATCH /webhooks/{application_id}/{token}/messages/@original`）。失敗したらエラーの文言に書き換える
-- 草の数はあとから増えることがある（作業ブランチの commit が main にマージされると、commit した日に数えられる）
+- 草の数はあとから増えることがある（作業ブランチの commit が main にマージされると、commit した日に数えられる）。確定した月に、あとから増えた分は反映しない
 
 ## 7. データの持ち方（Cloudflare D1）
 
@@ -159,21 +163,33 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 - MVP で使うキーは `channel_id`（投稿先チャンネル）のみ
 - 投稿はチャンネルの webhook URL ではなく、Bot トークンで Discord の REST API（`POST /channels/{channel_id}/messages`）を使う。Bot には投稿先チャンネルでの送信権限が必要
 
-### 7.3 各処理での使い方
+### 7.3 `contribution_months`：登録者ごと・月ごとの草の日数（`/ranking` 用）
+
+| カラム | 型 | 内容 |
+|---|---|---|
+| `github_id` | INTEGER | `users.github_id`（GitHub 名が変わっても使い回せるよう ID で持つ） |
+| `month` | TEXT | 年月（例：`2026-11`、UTC） |
+| `green_days` | INTEGER | その月に草が生えた日数（0 も保存する） |
+| `fetched_at` | INTEGER | 取得した時刻。その月が終わる前に取ったものは、月が変わったら取り直す |
+
+- 主キーは (`github_id`, `month`)。今月の分は保存しない（毎回取る）
+
+### 7.4 各処理での使い方
 
 | 処理 | 操作 |
 |---|---|
-| `/register` | `GET /users/{name}` で存在を確認し、`github_id` を取得する。新規なら追加、登録済みなら上書きする。GitHub 名が変わった場合は `etag` と `seen_event_ids` を null にする |
-| `/unregister` | 行を削除する |
+| `/register` | `GET /users/{name}` で存在を確認し、`github_id` を取得する。新規なら追加、登録済みなら上書きする。GitHub 名が変わった場合は `etag` と `seen_event_ids` を null にする。別のアカウントに変更したら、前のアカウントの `contribution_months` を消す。応答のあと、その人の過去の草を取って `contribution_months` に保存する |
+| `/unregister` | 行を削除する（`contribution_months` の行も消す） |
 | `/push on/off` | `push_enabled` を更新する |
 | `/list` | `users` を全件取得する |
 | `/config channel` | `settings` の `channel_id` を更新する |
-| `/ranking` | `users` を全件取得する（集計結果は保存しない） |
+| `/ranking` | `users` と `contribution_months` を全件取得し、新しく確定した月を `contribution_months` に保存する |
 | ポーリング | `last_polled_at` の古い順に取得し、処理後に `etag`・`seen_event_ids`・`last_polled_at` を更新する |
 
-### 7.4 保存しないもの
+### 7.5 保存しないもの
 
-- 投稿の履歴は保存しない。PR 数や草の日数は `/ranking` のたびに GitHub GraphQL API から取得する
+- 投稿の履歴は保存しない
+- PR 数は保存しない（`/ranking` のたびに取る）
 
 ## 8. 文言
 

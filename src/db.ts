@@ -53,8 +53,14 @@ export async function updateGithubLogin(db: D1Database, discordUserId: string, g
     .run();
 }
 
+/** 登録を消す。その人の草の日数（contribution_months）も一緒に消す */
 export async function deleteUser(db: D1Database, discordUserId: string): Promise<boolean> {
-  const r = await db.prepare("DELETE FROM users WHERE discord_user_id = ?").bind(discordUserId).run();
+  const [, r] = await db.batch([
+    db
+      .prepare("DELETE FROM contribution_months WHERE github_id = (SELECT github_id FROM users WHERE discord_user_id = ?)")
+      .bind(discordUserId),
+    db.prepare("DELETE FROM users WHERE discord_user_id = ?").bind(discordUserId),
+  ]);
   return r.meta.changes > 0;
 }
 
@@ -88,6 +94,35 @@ export async function savePollState(
     .prepare("UPDATE users SET etag = ?, seen_event_ids = ?, last_polled_at = ? WHERE discord_user_id = ?")
     .bind(state.etag, state.seenEventIds, state.lastPolledAt, discordUserId)
     .run();
+}
+
+// ---- contribution_months（/ranking の草の日数） ----
+
+export interface ContributionMonthRow {
+  github_id: number;
+  month: string; // "2026-11"
+  green_days: number;
+  fetched_at: number;
+}
+
+/** 保存してある月ごとの草の日数（登録者が少ないので全件取る） */
+export async function listContributionMonths(db: D1Database): Promise<ContributionMonthRow[]> {
+  const r = await db.prepare("SELECT * FROM contribution_months").all<ContributionMonthRow>();
+  return r.results;
+}
+
+export async function saveContributionMonths(db: D1Database, rows: ContributionMonthRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const stmt = db.prepare(
+    `INSERT INTO contribution_months (github_id, month, green_days, fetched_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT (github_id, month) DO UPDATE SET green_days = excluded.green_days, fetched_at = excluded.fetched_at`,
+  );
+  await db.batch(rows.map((r) => stmt.bind(r.github_id, r.month, r.green_days, r.fetched_at)));
+}
+
+/** GitHub アカウントを変えたときに、前のアカウントの分を消す */
+export async function deleteContributionMonths(db: D1Database, githubId: number): Promise<void> {
+  await db.prepare("DELETE FROM contribution_months WHERE github_id = ?").bind(githubId).run();
 }
 
 // ---- settings ----

@@ -7,9 +7,10 @@
  */
 import * as db from "../db.ts";
 import type { Env } from "../env.ts";
-import { fetchContributionStats, fetchUser, isValidLogin } from "../github.ts";
+import { syncContributions } from "../contribution-sync.ts";
+import { fetchUser, isValidLogin } from "../github.ts";
 import { helpText, list, msg, ranking as rankingText } from "../messages.ts";
-import { buildRankingText, countGreenDays, rankStats } from "../ranking.ts";
+import { buildRankingText, rankStats } from "../ranking.ts";
 import { editOriginalResponse, getChannel, getGuildMember, getGuildRoles } from "./api.ts";
 import { canPost, computeChannelPermissions, isThread } from "./permissions.ts";
 
@@ -52,7 +53,7 @@ export async function handleCommand(env: Env, interaction: Interaction, ctx: Exe
   try {
     switch (data.name) {
       case "register":
-        return await register(env, userId, String(data.options?.[0]?.value ?? ""));
+        return await register(env, userId, String(data.options?.[0]?.value ?? ""), ctx);
       case "unregister":
         return await unregister(env, userId);
       case "push":
@@ -75,7 +76,7 @@ export async function handleCommand(env: Env, interaction: Interaction, ctx: Exe
 }
 
 // ---- /register ----
-async function register(env: Env, discordUserId: string, input: string): Promise<Response> {
+async function register(env: Env, discordUserId: string, input: string, ctx: ExecutionContext): Promise<Response> {
   const name = input.trim();
   if (!isValidLogin(name)) return reply(msg.githubUserNotFound(name));
 
@@ -90,16 +91,29 @@ async function register(env: Env, discordUserId: string, input: string): Promise
   const now = Date.now();
   const me = await db.getUser(env.DB, discordUserId);
 
+  // /ranking 用に、過去の草の日数を取って保存しておく（応答を返したあとに処理する）
+  // 同じアカウントで再登録したときも走るので、保存が欠けている人は /register をやり直せば埋まる
+  const syncInBackground = () =>
+    ctx.waitUntil(
+      syncContributions(env, [{ github_login: gh.login, github_id: gh.id }], now).catch((e) =>
+        console.error(`${gh.login} の草の取得でエラー`, e),
+      ),
+    );
+
   if (!me) {
     await db.insertUser(env.DB, discordUserId, gh.login, gh.id, now);
+    syncInBackground();
     return reply(msg.registered(gh.login));
   }
   if (me.github_id === gh.id) {
     // 同じアカウント。GitHub 側でユーザー名が変わっていれば追従する
     if (me.github_login !== gh.login) await db.updateGithubLogin(env.DB, discordUserId, gh.login, now);
+    syncInBackground();
     return reply(msg.alreadyRegistered(gh.login));
   }
   await db.changeGithub(env.DB, discordUserId, gh.login, gh.id, now);
+  await db.deleteContributionMonths(env.DB, me.github_id); // 前のアカウントの草は使わない
+  syncInBackground();
   return reply(msg.registerChanged(me.github_login, gh.login));
 }
 
@@ -134,10 +148,7 @@ async function ranking(env: Env, interactionToken: string, discordUserId: string
   ctx.waitUntil(
     (async () => {
       try {
-        const stats = await fetchContributionStats(env, users.map((u) => u.github_login));
-        const ranked = rankStats(
-          stats.map((s) => ({ login: s.login, prs: s.prs, days: s.years.reduce((sum, y) => sum + countGreenDays(y.weeks), 0) })),
-        );
+        const ranked = rankStats(await syncContributions(env, users, Date.now()));
         await editOriginalResponse(env, interactionToken, buildRankingText(ranked, myLogin));
       } catch (e) {
         console.error("/ranking の集計でエラー", e);

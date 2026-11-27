@@ -1,17 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRankingText, countGreenDays, rankStats, type RankingStats } from "../src/ranking.ts";
-
-const week = (...counts: number[]) => ({ contributionDays: counts.map((contributionCount) => ({ contributionCount })) });
-
-describe("countGreenDays", () => {
-  it("contribution が 1 以上の日だけ数える", () => {
-    expect(countGreenDays([week(0, 1, 0, 5), week(2, 0, 0)])).toBe(3);
-  });
-
-  it("空なら 0", () => {
-    expect(countGreenDays([])).toBe(0);
-  });
-});
+import { buildRankingText, rankStats, type RankingStats } from "../src/ranking.ts";
 
 describe("rankStats", () => {
   it("PR 数の多い順に並べ、同じ PR 数は同率にする（1, 2, 2, 4）", () => {
