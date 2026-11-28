@@ -119,8 +119,9 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `/push off` | 自分の commit を流さない（初期設定） |
 | `/star on` | スターをタイムラインに流す（初期設定） |
 | `/star off` | スターを流さない |
-| `/list` | 登録者の一覧を表示する（GitHub ユーザー名と commit 表示のオンオフ。メンションはしない） |
+| `/list` | 登録者の一覧を表示する（人数と GitHub ユーザー名。メンションはしない） |
 | `/config channel <#チャンネル>` | タイムラインの投稿先チャンネルを変更する。テキスト・アナウンスチャンネルと公開スレッド（フォーラムの投稿を含む）を選べる。プライベートスレッドとロックされたスレッドは不可 |
+| `/config me` | 自分の設定（commit・スター・GitHub 名の順）を表示する。本人にだけ見える |
 | `/ranking` | 登録者を作成した PR の数で並べ、草が生えた日数を添えて表示する（§6.1） |
 | `/help` | コマンドの説明と使い方を表示する（文言は別途作成） |
 
@@ -217,6 +218,7 @@ GitHub の webhook はリポジトリ / organization / GitHub App のインス�
 | `/push` の `on` / `off` | 流す / 流さない |
 | `/list` | 登録者の一覧を表示する |
 | `/config` | 設定を変更する（Discord の仕様で必須のため仮置き） |
+| `/config me` | 自分の設定を表示する |
 | `/config channel` | 投稿先のチャンネルを変更する |
 | `/config channel` の `channel` | 投稿先のチャンネル |
 | `/ranking` | PRの数で登録者を並べる |
@@ -257,7 +259,7 @@ PR のタイトル・commit のタイトルは GitHub の内容をそのまま�
 | 場面 | 文言 |
 |---|---|
 | 見出し | 登録者（{人数}人） |
-| 1 行ごと | `{github}`　commit：オン ／ `{github}`　commit：オフ |
+| 1 行ごと | `{github}` |
 | 0 人のとき | 登録者はいません。 |
 
 ### 8.5 `/ranking`（仮の文言。精査中）

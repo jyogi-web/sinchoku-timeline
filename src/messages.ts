@@ -41,9 +41,14 @@ export const card = {
 // ---- §8.4 /list ----
 export const list = {
   heading: (count: number) => `登録者（${count}人）`,
-  line: (github: string, pushEnabled: boolean, starEnabled: boolean) =>
-    `\`${github}\`　commit：${pushEnabled ? "オン" : "オフ"}　スター：${starEnabled ? "オン" : "オフ"}`,
+  line: (github: string) => `\`${github}\``,
   empty: () => "登録者はいません。",
+};
+
+// ---- /config me（仮の文言）。出す順番は commit、スター、名前 ----
+export const myConfig = {
+  line: (pushEnabled: boolean, starEnabled: boolean, github: string) =>
+    `commit：${pushEnabled ? "オン" : "オフ"}　スター：${starEnabled ? "オン" : "オフ"}　\`${github}\``,
 };
 
 // ---- §8.5 /ranking（仮の文言） ----
@@ -79,6 +84,9 @@ export function helpText(channelId: string | null): string {
     "",
     "`/config channel <#チャンネル>`",
     "  投稿先のチャンネルを変更します。",
+    "",
+    "`/config me`",
+    "  自分の設定（commit、スター、GitHub名）を表示します。",
     "",
     "`/ranking`",
     "  作成したPRの数で登録者を並べます。（）は草が生えた日数です。",

@@ -49,6 +49,7 @@ export const commands = [
     // Discord ではサブコマンドを持つコマンドにも説明が必須。仕様書に文言がないため仮置き
     description: "設定を変更する",
     options: [
+      { type: SUB_COMMAND, name: "me", description: "自分の設定を表示する" },
       {
         type: SUB_COMMAND,
         name: "channel",

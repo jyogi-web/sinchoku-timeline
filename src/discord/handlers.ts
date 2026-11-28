@@ -9,7 +9,7 @@ import * as db from "../db.ts";
 import type { Env } from "../env.ts";
 import { syncContributions } from "../contribution-sync.ts";
 import { fetchUser, isValidLogin } from "../github.ts";
-import { helpText, list, msg, ranking as rankingText } from "../messages.ts";
+import { helpText, list, msg, myConfig, ranking as rankingText } from "../messages.ts";
 import { buildRankingText, rankStats } from "../ranking.ts";
 import { editOriginalResponse, getChannel, getGuildMember, getGuildRoles } from "./api.ts";
 import { canPost, computeChannelPermissions, isThread } from "./permissions.ts";
@@ -65,7 +65,7 @@ export async function handleCommand(env: Env, interaction: Interaction, ctx: Exe
       case "ranking":
         return await ranking(env, interaction.token, userId, ctx);
       case "config":
-        return await config(env, interaction, data.options?.[0]);
+        return await config(env, interaction, userId, data.options?.[0]);
       case "help":
         return reply(helpText(await db.getSetting(env.DB, db.SETTING_CHANNEL_ID)));
       default:
@@ -143,7 +143,7 @@ async function star(env: Env, discordUserId: string, enabled: boolean): Promise<
 async function listUsers(env: Env): Promise<Response> {
   const users = await db.listUsers(env.DB);
   if (users.length === 0) return reply(list.empty(), false);
-  const lines = users.map((u) => list.line(u.github_login, u.push_enabled === 1, u.star_enabled === 1));
+  const lines = users.map((u) => list.line(u.github_login));
   return reply([list.heading(users.length), ...lines].join("\n"), false);
 }
 
@@ -168,8 +168,16 @@ async function ranking(env: Env, interactionToken: string, discordUserId: string
   return reply(rankingText.loading(), false);
 }
 
+// ---- /config me（自分の設定。本人にだけ見える） ----
+async function myConfigReply(env: Env, userId: string): Promise<Response> {
+  const user = await db.getUser(env.DB, userId);
+  if (!user) return reply(msg.registerFirst());
+  return reply(myConfig.line(user.push_enabled === 1, user.star_enabled === 1, user.github_login));
+}
+
 // ---- /config channel <#チャンネル> ----
-async function config(env: Env, interaction: Interaction, sub: CommandOption | undefined): Promise<Response> {
+async function config(env: Env, interaction: Interaction, userId: string, sub: CommandOption | undefined): Promise<Response> {
+  if (sub?.name === "me") return await myConfigReply(env, userId);
   if (sub?.name !== "channel" || !interaction.guild_id) return reply(msg.internalError());
   const channelId = String(sub.options?.[0]?.value ?? "");
 
